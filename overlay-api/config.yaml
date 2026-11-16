@@ -1,0 +1,51 @@
+# Настройки overlay-api. Любое значение можно не указывать — подставится значение по умолчанию.
+# Скалярные параметры переопределяются переменными окружения (в скобках).
+
+# Адрес, на котором слушает сервис (OVERLAY_LISTEN).
+listen: ":8787"
+
+# Prometheus со стеком cc-overlay (OVERLAY_PROMETHEUS_URL).
+prometheus_url: http://prometheus:9090
+
+# Регулярное выражение для метки job: какие источники считать Claude Code (OVERLAY_JOB_REGEX).
+# Метка приходит из service.name; синтетика (claude-code-synth) сюда не попадает.
+job_regex: "claude-code(-desktop)?"
+
+# Задание scrape, по которому судим о здоровье конвейера (prometheus/prometheus.yml).
+pipeline_job: collector-export
+
+# Как часто пересчитывать блок сессии и скорость (OVERLAY_POLL_INTERVAL).
+poll_interval: 1s
+
+# Как часто пересчитывать итоги за сегодня и за 5 часов (OVERLAY_TOTALS_INTERVAL).
+# Эти запросы читают часы истории, поэтому выполняются реже.
+totals_interval: 10s
+
+# Интервал экспорта метрик в Claude Code, OTEL_METRIC_EXPORT_INTERVAL (OVERLAY_EXPORT_INTERVAL).
+# Сессия считается живой, если её последняя точка моложе двух интервалов.
+export_interval: 5s
+
+# Таймаут одного запроса к Prometheus.
+query_timeout: 3s
+
+# Глубина поиска значения счётчика до начала окна (docs/queries.md, «итог за окно»).
+baseline_lookback: 168h
+
+# Через сколько данные status line (лимиты, контекст) помечаются как устаревшие.
+statusline_max_age: 10m
+
+# Часовой пояс для границы «сегодня» (переменная TZ). Пусто — UTC.
+timezone: ""
+
+# С каких origin браузерным страницам разрешено читать API (OVERLAY_CORS_ORIGINS, через запятую).
+# Здесь origin окна Tauri; "*" запрещён (ADR-0006).
+cors_origins:
+  - http://tauri.localhost
+  - tauri://localhost
+
+# Цветовые пороги. Оверлей красит показатель по уровню ok / warn / crit.
+thresholds:
+  cost_usd_per_hour: {warn: 5, crit: 15}
+  five_hour_percent: {warn: 70, crit: 90}
+  seven_day_percent: {warn: 70, crit: 90}
+  context_percent: {warn: 70, crit: 90}

@@ -6,14 +6,16 @@ E2E_SUBNET ?= 10.210.1.0/24
 # Тесты идут в отдельном compose-проекте со своими томами: синтетика не попадает в рабочие данные.
 # У тестового проекта своя подсеть, чтобы он работал одновременно с рабочим стеком.
 E2E := CC_OVERLAY_SUBNET=$(E2E_SUBNET) docker compose -p cc-overlay-e2e -f compose.yaml -f compose.e2e.yaml
-GO := $(E2E) run --rm --no-deps go
+# Go запускается в контейнере (ADR-0003); в репозитории два модуля.
+GO_API := $(E2E) run --rm --no-deps -w /repo/overlay-api go
+GO_SYNTH := $(E2E) run --rm --no-deps -w /repo/tools/synth go
 
 # Образы линтеров. Версии сервисов стека закреплены в compose.yaml.
 YAMLLINT_IMAGE := cytopia/yamllint:1-0.14
 HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine
 SYNTH_IMAGE := cc-overlay/synth:dev
 
-.PHONY: go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy
+.PHONY: restart fmt go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy snapshot
 
 help: ## Показать список команд
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -22,12 +24,16 @@ help: ## Показать список команд
 	@cp .env.example .env
 	@echo "Создан .env из .env.example — поменяй в нём пароль Grafana."
 
-up: .env ## Запустить ядро: коллектор и Prometheus
-	$(COMPOSE) up -d --wait
+up: .env ## Запустить ядро: коллектор, Prometheus и overlay-api
+	$(COMPOSE) up -d --build --wait
 	@$(MAKE) --no-print-directory wait
 
 up-history: .env ## Запустить ядро и Grafana (http://127.0.0.1:3000)
-	$(COMPOSE) --profile history up -d --wait
+	$(COMPOSE) --profile history up -d --build --wait
+	@$(MAKE) --no-print-directory wait
+
+restart: ## Перезапустить сервисы после правки конфигов (compose не замечает изменений в файлах)
+	$(COMPOSE) --profile history restart
 	@$(MAKE) --no-print-directory wait
 
 down: ## Остановить стек; данные в томах сохраняются
@@ -45,6 +51,9 @@ wait: ## Дождаться готовности коллектора
 		sleep 1; \
 	done; echo "коллектор не ответил на 127.0.0.1:13133 за 30 с" >&2; exit 1
 
+snapshot: ## Показать текущий снимок overlay-api
+	@curl -fsS http://127.0.0.1:8787/api/v1/snapshot | python3 -m json.tool --no-ensure-ascii
+
 check: .env ## Проверить конфиги: compose, коллектор, Prometheus, YAML, Dockerfile
 	$(COMPOSE) --profile history config -q
 	$(E2E) --profile test config -q
@@ -52,6 +61,9 @@ check: .env ## Проверить конфиги: compose, коллектор, P
 	$(COMPOSE) run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
 	docker run --rm -v "$(CURDIR)":/data:ro $(YAMLLINT_IMAGE) -s .
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < tools/synth/Dockerfile
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < overlay-api/Dockerfile
+	bash -n statusline/cc-overlay-statusline.sh
+	bash -n tools/verify-real.sh
 
 go-cache:
 	@docker volume create cc-overlay-gomod >/dev/null
@@ -60,26 +72,36 @@ go-cache:
 test: .env go-cache ## Быстрые тесты без запуска стека: семантика PromQL и unit-тесты Go
 	$(COMPOSE) run --rm --no-deps --entrypoint promtool \
 		-v "$(CURDIR)/prometheus/tests":/tests:ro prometheus test rules /tests/totals_test.yml
-	$(GO) go vet -tags e2e ./...
-	$(GO) go test -count=1 ./...
+	$(GO_API) sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: файлы выше не отформатированы"; exit 1; }'
+	$(GO_SYNTH) sh -c 'test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt: файлы выше не отформатированы"; exit 1; }'
+	$(GO_API) go vet ./...
+	$(GO_API) go test -count=1 ./...
+	$(GO_SYNTH) go vet -tags e2e ./...
+	$(GO_SYNTH) go test -count=1 ./...
 
-test-e2e: .env go-cache ## Сквозной тест на синтетике: synth → коллектор → Prometheus
+test-e2e: .env go-cache ## Сквозной тест на синтетике: synth → коллектор → Prometheus → overlay-api
 	@$(E2E) down -v --remove-orphans >/dev/null 2>&1 || true
-	$(E2E) up -d --wait
+	$(E2E) up -d --build --wait
 	@status=0; \
-	$(E2E) run --rm go go test -tags e2e -count=1 -v ./e2e/... || status=$$?; \
-	if [ $$status -ne 0 ]; then $(E2E) logs --tail=40 otel-collector; fi; \
+	$(E2E) run --rm -w /repo/tools/synth go go test -tags e2e -count=1 -v ./e2e/... || status=$$?; \
+	if [ $$status -ne 0 ]; then $(E2E) logs --tail=40 otel-collector overlay-api; fi; \
 	$(E2E) down -v --remove-orphans >/dev/null 2>&1; \
 	exit $$status
 
 verify-real: ## Проверить, что метрики настоящей сессии Claude Code дошли до Prometheus
 	@bash tools/verify-real.sh
 
-build: ## Собрать образ генератора синтетики
+build: .env ## Собрать образы overlay-api и генератора синтетики
+	$(COMPOSE) build overlay-api
 	docker build -t $(SYNTH_IMAGE) tools/synth
 
 synth: build ## Минута синтетики в рабочий стек (метка job="claude-code-synth")
 	docker run --rm --network cc-overlay_default $(SYNTH_IMAGE) -endpoint otel-collector:4317
 
-tidy: .env go-cache ## Обновить go.mod и go.sum
-	$(GO) go mod tidy
+fmt: .env go-cache ## Отформатировать код Go
+	$(GO_API) gofmt -w .
+	$(GO_SYNTH) gofmt -w .
+
+tidy: .env go-cache ## Обновить go.mod и go.sum обоих модулей
+	$(GO_API) go mod tidy
+	$(GO_SYNTH) go mod tidy

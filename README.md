@@ -2,16 +2,17 @@
 
 Живой мониторинг расхода Claude Code: оверлей поверх окон Windows и история в Grafana. Всё работает локально, наружу ничего не уходит.
 
-Состояние: готова фаза 1 — пайплайн метрик. Оверлея пока нет. Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
+Состояние: готовы фазы 1 и 2 — пайплайн метрик и overlay-api. Окна оверлея пока нет: данные можно смотреть командой `make snapshot`. Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
 
 ## Быстрый старт
 
 Нужны Docker Engine с Compose и `make`. Go, Node и прочее ставить не нужно: тесты и линтеры идут в контейнерах.
 
 ```bash
-make up            # коллектор и Prometheus; при первом запуске создаёт .env
+make up            # коллектор, Prometheus и overlay-api; при первом запуске создаёт .env
 # добавь блок env в ~/.claude/settings.json (ниже) и перезапусти Claude Code
 make verify-real   # проверить, что метрики настоящей сессии дошли
+make snapshot      # то, что увидит оверлей
 make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (admin, пароль из .env)
 ```
 
@@ -42,15 +43,34 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 
 Настройки читаются при старте Claude Code, после правки нужен перезапуск сессии.
 
+### Status line: лимиты подписки и контекст
+
+Процент 5-часового и недельного лимита и заполнение контекста через OpenTelemetry не передаются. Их получает скрипт status line и пересылает в overlay-api ([ADR-0009](docs/adr/0009-statusline-bridge.md)). Заодно в терминале появляется строка вида `Sonnet · ctx 18% · 5h 24% · 7d 41%`.
+
+Нужен `jq`: `sudo apt install jq`. Затем добавь в `~/.claude/settings.json` ключ `statusLine`, подставив свой путь к репозиторию:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash /путь/к/cc-overlay/statusline/cc-overlay-statusline.sh"
+  }
+}
+```
+
+Скрипт отправляет только идентификатор сессии, название модели, стоимость, заполнение контекста и лимиты. Пути и имя репозитория, которые Claude Code тоже передаёт скрипту, наружу не уходят. Без этого шага оверлей работает, но поля `limits` и `context` остаются пустыми.
+
 ## Команды
 
 | Команда | Что делает |
 |---|---|
 | `make up` / `make up-history` | запустить ядро / ядро с Grafana |
 | `make down` | остановить; данные в томах сохраняются |
+| `make restart` | перезапустить после правки конфигов |
+| `make snapshot` | текущий снимок overlay-api |
 | `make logs`, `make ps` | логи и состояние контейнеров |
 | `make check` | проверить конфиги: compose, коллектор, Prometheus, YAML, Dockerfile |
-| `make test` | тесты семантики PromQL и unit-тесты генератора |
+| `make test` | тесты семантики PromQL, форматирование и unit-тесты Go |
 | `make test-e2e` | сквозной тест на синтетике в отдельном compose-проекте |
 | `make verify-real` | проверить данные настоящей сессии Claude Code |
 | `make synth` | минута синтетики в рабочий стек, для просмотра графиков |
@@ -66,11 +86,12 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 | 4317 | коллектор, приём OTLP gRPC |
 | 13133 | коллектор, health check |
 | 9090 | Prometheus |
+| 8787 | overlay-api: снимок, поток, приём status line ([docs/api.md](docs/api.md)) |
 | 3000 | Grafana (профиль `history`) |
 
 ## Данных нет — что проверить
 
-1. `make ps` — оба контейнера запущены, Prometheus в состоянии healthy.
+1. `make ps` — контейнеры запущены и в состоянии healthy. `make snapshot` — поле `status` подскажет, где искать: `backend_down`, `stale`, `no_data`.
 2. `curl -s http://127.0.0.1:13133/` — коллектор отвечает `Server available`.
 3. В Prometheus на странице Status → Targets цель `collector-export` в состоянии UP.
 4. Claude Code перезапущен после правки настроек и получил хотя бы один ответ: метрики появляются только после первого запроса к API.
@@ -87,6 +108,8 @@ collector/config.yaml        конвейеры коллектора
 prometheus/prometheus.yml    цели и интервалы сбора
 prometheus/tests/            тесты семантики итогов (promtool)
 grafana/provisioning/        источники данных как код
+overlay-api/                 сервис показателей: снимок, SSE, приём status line
+statusline/                  скрипт status line для Claude Code
 tools/synth/                 генератор синтетической телеметрии и e2e-тесты
 docs/                        архитектура, ADR, запросы, план
 ```

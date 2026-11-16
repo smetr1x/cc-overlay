@@ -41,6 +41,29 @@ services:
       timeout: 3s
       retries: 12
 
+  overlay-api:
+    build: ./overlay-api
+    image: cc-overlay/overlay-api:dev
+    environment:
+      OVERLAY_PROMETHEUS_URL: http://prometheus:9090
+      # Часовой пояс для границы «сегодня».
+      TZ: ${CC_OVERLAY_TZ:-UTC}
+    volumes:
+      - ./overlay-api/config.yaml:/etc/overlay-api/config.yaml:ro
+    ports:
+      - "127.0.0.1:8787:8787" # снимок и поток для оверлея, приём status line
+    mem_limit: 32m
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      # В образе нет shell и curl: бинарник проверяет себя сам.
+      test: ["CMD", "/overlay-api", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
   grafana:
     image: grafana/grafana:13.2.6
     profiles: ["history"]
@@ -55,7 +78,8 @@ services:
       - grafana-data:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"
-    mem_limit: 200m
+    # Grafana 13 занимает около 190 МБ уже в простое, без дашбордов.
+    mem_limit: 350m
     restart: unless-stopped
     depends_on:
       prometheus:

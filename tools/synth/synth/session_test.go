@@ -28,7 +28,7 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 func TestSessionEmitsClaudeCodeShape(t *testing.T) {
 	ctx := context.Background()
 	reader := sdkmetric.NewManualReader()
-	s, err := newSession("sess-1", reader)
+	s, err := newSession("sess-1", ServiceName, reader)
 	if err != nil {
 		t.Fatal(err)
 	}

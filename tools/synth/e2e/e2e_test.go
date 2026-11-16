@@ -5,6 +5,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -306,14 +307,19 @@ func testPipeline(t *testing.T, temporality synth.Temporality, endpoint string) 
 	if err := b.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(5 * exportInterval)
-	age, err = query(t, fmt.Sprintf(`time() - max(timestamp(%s{session_id="%s"}))`, tokens, idB))
-	if err != nil {
-		t.Fatal(err)
+	// Точное время остановки зависит от задержек конвейера, поэтому ждём,
+	// пока возраст не перерастёт несколько интервалов: у живой сессии он не превышает одного-двух.
+	var got float64
+	for start := time.Now(); time.Since(start) < deadline; time.Sleep(500 * time.Millisecond) {
+		age, err = query(t, fmt.Sprintf(`time() - max(timestamp(%s{session_id="%s"}))`, tokens, idB))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got = age[""]; got >= 4 {
+			return
+		}
 	}
-	if got := age[""]; got < 4 {
-		t.Errorf("завершённая сессия: возраст последней точки %.1f с, ожидалось не меньше 4 с", got)
-	}
+	t.Errorf("завершённая сессия: возраст последней точки %.1f с и не растёт", got)
 }
 
 func TestCumulativePipeline(t *testing.T) {
@@ -323,4 +329,166 @@ func TestCumulativePipeline(t *testing.T) {
 // Запасной путь из ADR-0001: delta у источника и deltatocumulative в коллекторе.
 func TestDeltaFallbackPipeline(t *testing.T) {
 	testPipeline(t, synth.Delta, env(t, "SYNTH_OTLP_DELTA_ENDPOINT"))
+}
+
+// --- overlay-api ---
+
+// snapshotService — service.name, по которому тестовый overlay-api отбирает сессии
+// (OVERLAY_JOB_REGEX в compose.e2e.yaml). Сессии остальных тестов он не видит.
+const snapshotService = "claude-code-snapshot-test"
+
+func getSnapshot(t *testing.T) (map[string]any, error) {
+	t.Helper()
+	resp, err := http.Get(env(t, "OVERLAY_API_URL") + "/api/v1/snapshot")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var snap map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
+// dig достаёт вложенное значение: dig(snap, "session", "tokens", "input").
+func dig(v any, path ...string) any {
+	for _, key := range path {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[key]
+	}
+	return v
+}
+
+// snapshotEventually ждёт, пока все перечисленные поля снимка примут ожидаемые значения.
+func snapshotEventually(t *testing.T, name string, want map[string]any) map[string]any {
+	t.Helper()
+	var snap map[string]any
+	var err error
+	var mismatch string
+	for start := time.Now(); time.Since(start) < deadline; time.Sleep(500 * time.Millisecond) {
+		if snap, err = getSnapshot(t); err != nil {
+			mismatch = err.Error()
+			continue
+		}
+		mismatch = ""
+		for path, w := range want {
+			got := dig(snap, strings.Split(path, ".")...)
+			gf, gok := got.(float64)
+			wf, wok := w.(float64)
+			if gok && wok && math.Abs(gf-wf) < 1e-9 {
+				continue
+			}
+			if got != w {
+				mismatch = fmt.Sprintf("%s = %v, ожидалось %v", path, got, w)
+				break
+			}
+		}
+		if mismatch == "" {
+			return snap
+		}
+	}
+	raw, _ := json.MarshalIndent(snap, "  ", "  ")
+	t.Fatalf("%s: %s\n  снимок: %s", name, mismatch, raw)
+	return nil
+}
+
+// Сквозной путь до оверлея: synth → коллектор → Prometheus → overlay-api.
+func TestSnapshot(t *testing.T) {
+	endpoint := env(t, "SYNTH_OTLP_ENDPOINT")
+	waitTCP(t, endpoint)
+	ctx := context.Background()
+
+	// До первых данных: явный статус, а не нули.
+	snapshotEventually(t, "пустой стек", map[string]any{"status": "no_data", "session": nil, "today": nil, "rate": nil})
+
+	run := fmt.Sprint(time.Now().UnixNano())
+	idA, idB := "snap-a-"+run, "snap-b-"+run
+	cfg := synth.Config{Endpoint: endpoint, Temporality: synth.Cumulative, Interval: exportInterval, ServiceName: snapshotService}
+	a, b := runTwoSessions(t, cfg, idA, idB)
+	defer a.Close(ctx)
+
+	// Итоги по всем сессиям: A 1510 токенов (из них 1000 чтение кэша), B 410 (из них 400).
+	snapshotEventually(t, "две живые сессии", map[string]any{
+		"status":                   "ok",
+		"active_sessions":          2.0,
+		"today.tokens":             520.0,
+		"today.cache_read_tokens":  1400.0,
+		"today.cost_usd":           0.76,
+		"today.approximate":        false,
+		"window_5h.tokens":         520.0,
+		"rate.tokens_per_minute":   104.0, // 520 за окно 5 минут
+		"rate.cost_usd_per_hour":   9.12,  // 0.76 × 12
+		"levels.cost_usd_per_hour": "warn",
+	})
+
+	// Активность в B делает её текущей сессией.
+	time.Sleep(2 * time.Second)
+	b.AddTokens(ctx, "output", sonnet, "main", 40)
+	if err := b.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshotEventually(t, "текущая сессия следует за активностью", map[string]any{
+		"session.id":                    idB,
+		"session.model":                 sonnet,
+		"session.tokens.input":          7.0,
+		"session.tokens.output":         43.0,
+		"session.tokens.cache_read":     400.0,
+		"session.tokens.cache_creation": 0.0,
+		"session.cost_usd":              0.01,
+		"session.cache_hit_ratio":       400.0 / 407.0,
+		"today.tokens":                  560.0,
+		"limits":                        nil,
+		"session.context":               nil,
+	})
+	if age, _ := dig(snap, "data_age_seconds").(float64); age > 3 {
+		t.Errorf("data_age_seconds = %.1f при живых сессиях", age)
+	}
+	if dur, ok := dig(snap, "session", "duration_seconds").(float64); !ok || dur <= 0 || dur > 120 {
+		t.Errorf("session.duration_seconds = %v", dig(snap, "session", "duration_seconds"))
+	}
+
+	// Мост status line (ADR-0009): отчёт скрипта появляется в снимке.
+	report := fmt.Sprintf(`{"session_id":%q,"model":"Synth","context":{"used_percentage":75,"window_size":200000},
+		"rate_limits":{"five_hour":{"used_percentage":93,"resets_at":%d},"seven_day":{"used_percentage":41.5,"resets_at":%d}}}`,
+		idB, time.Now().Add(time.Hour).Unix(), time.Now().Add(72*time.Hour).Unix())
+	resp, err := http.Post(env(t, "OVERLAY_API_URL")+"/api/v1/statusline", "application/json", bytes.NewBufferString(report))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("отчёт status line: HTTP %d", resp.StatusCode)
+	}
+	snapshotEventually(t, "данные status line в снимке", map[string]any{
+		"limits.five_hour.used_percent": 93.0,
+		"limits.seven_day.used_percent": 41.5,
+		"limits.stale":                  false,
+		"session.context.used_percent":  75.0,
+		"session.context.window_tokens": 200000.0,
+		"levels.five_hour_percent":      "crit",
+		"levels.context_percent":        "warn",
+	})
+
+	// Обе сессии завершены: статус idle, блок сессии пуст, итоги за день остаются.
+	if err := a.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshotEventually(t, "после завершения сессий", map[string]any{
+		"status":          "idle",
+		"active_sessions": 0.0,
+		"session":         nil,
+		"today.tokens":    560.0,
+	})
+
+	// Собственные метрики сервиса попадают в Prometheus: проценты лимитов сохраняются в истории.
+	eventually(t, "лимит из status line в Prometheus",
+		`cc_overlay_rate_limit_used_percent{window="five_hour"}`,
+		map[string]float64{`__name__=cc_overlay_rate_limit_used_percent,instance=overlay-api:8787,job=overlay-api,window=five_hour`: 93})
 }

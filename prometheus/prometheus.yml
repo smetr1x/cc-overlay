@@ -22,6 +22,11 @@ scrape_configs:
     static_configs:
       - targets: ["otel-collector:8888"]
 
+  # Собственные метрики overlay-api, в том числе проценты лимитов из status line.
+  - job_name: overlay-api
+    static_configs:
+      - targets: ["overlay-api:8787"]
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

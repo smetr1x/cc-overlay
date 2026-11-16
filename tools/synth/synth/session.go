@@ -44,6 +44,7 @@ type Config struct {
 	Endpoint    string        // host:port приёмника OTLP gRPC
 	Temporality Temporality   //
 	Interval    time.Duration // интервал экспорта, аналог OTEL_METRIC_EXPORT_INTERVAL
+	ServiceName string        // service.name ресурса; пусто — ServiceName по умолчанию
 }
 
 // Session — одна синтетическая сессия Claude Code.
@@ -76,13 +77,17 @@ func NewSession(ctx context.Context, id string, cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("экспортёр OTLP: %w", err)
 	}
 	reader := sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(cfg.Interval))
-	return newSession(id, reader)
+	serviceName := cfg.ServiceName
+	if serviceName == "" {
+		serviceName = ServiceName
+	}
+	return newSession(id, serviceName, reader)
 }
 
 // newSession собирает сессию поверх произвольного reader; в тестах это ManualReader.
-func newSession(id string, reader sdkmetric.Reader) (*Session, error) {
+func newSession(id, serviceName string, reader sdkmetric.Reader) (*Session, error) {
 	res := resource.NewSchemaless(
-		attribute.String("service.name", ServiceName),
+		attribute.String("service.name", serviceName),
 		attribute.String("service.version", "0.0.0-synth"),
 		attribute.String("os.type", "linux"),
 	)
