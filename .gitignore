@@ -1,0 +1,18 @@
+# секреты
+.env
+.env.*
+!.env.example
+
+# сборка
+overlay/node_modules/
+overlay/dist/
+overlay/src-tauri/target/
+overlay/src-tauri/gen/
+overlay-api/bin/
+tools/synth/bin/
+
+# редакторы и ОС
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
