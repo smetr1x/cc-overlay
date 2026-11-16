@@ -109,6 +109,27 @@ func TestStatuslineReport(t *testing.T) {
 	}
 }
 
+func TestUsageReport(t *testing.T) {
+	s, ts := newServer(t)
+	url := ts.URL + "/api/v1/usage"
+	jsonH := map[string]string{"Content-Type": "application/json"}
+
+	good := `{"limits":[{"kind":"session","percent":38,"resets_at":"2026-11-17T14:09:59.624090+00:00"},{"kind":"weekly_all","percent":7}]}`
+	if resp := do(t, "POST", url, good, jsonH); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("корректный отчёт: %d", resp.StatusCode)
+	}
+	l := s.Statusline.Limits(t0)
+	if l == nil || l.FiveHour.UsedPercent != 38 || l.SevenDay.UsedPercent != 7 || l.Source != "usage" {
+		t.Errorf("лимиты не сохранены: %+v", l)
+	}
+	if resp := do(t, "POST", url, `{"limits":[]}`, jsonH); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("пустой список: %d", resp.StatusCode)
+	}
+	if resp := do(t, "POST", url, good, map[string]string{"Content-Type": "application/json", "Origin": "http://x"}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("запрос из браузера: %d", resp.StatusCode)
+	}
+}
+
 func TestStreamSendsLatestThenUpdates(t *testing.T) {
 	s, ts := newServer(t)
 	s.Hub.Publish([]byte(`{"n":1}`))

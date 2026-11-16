@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	otellog "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/metric"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -54,6 +57,10 @@ type Session struct {
 	provider *sdkmetric.MeterProvider
 	identity []attribute.KeyValue
 
+	// События (сигнал logs). nil, если сессия создана без экспортёра событий.
+	logs   *sdklog.LoggerProvider
+	logger otellog.Logger
+
 	tokens   metric.Int64Counter
 	cost     metric.Float64Counter
 	sessions metric.Int64Counter
@@ -81,18 +88,35 @@ func NewSession(ctx context.Context, id string, cfg Config) (*Session, error) {
 	if serviceName == "" {
 		serviceName = ServiceName
 	}
-	return newSession(id, serviceName, reader)
+	s, err := newSession(id, serviceName, reader)
+	if err != nil {
+		return nil, err
+	}
+
+	logExporter, err := otlploggrpc.New(ctx, otlploggrpc.WithEndpoint(cfg.Endpoint), otlploggrpc.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("экспортёр событий OTLP: %w", err)
+	}
+	s.logs = sdklog.NewLoggerProvider(
+		sdklog.WithResource(sessionResource(serviceName)),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+	)
+	s.logger = s.logs.Logger("com.anthropic.claude_code.events")
+	return s, nil
 }
 
-// newSession собирает сессию поверх произвольного reader; в тестах это ManualReader.
-func newSession(id, serviceName string, reader sdkmetric.Reader) (*Session, error) {
-	res := resource.NewSchemaless(
+func sessionResource(serviceName string) *resource.Resource {
+	return resource.NewSchemaless(
 		attribute.String("service.name", serviceName),
 		attribute.String("service.version", "0.0.0-synth"),
 		attribute.String("os.type", "linux"),
 	)
+}
+
+// newSession собирает сессию поверх произвольного reader; в тестах это ManualReader.
+func newSession(id, serviceName string, reader sdkmetric.Reader) (*Session, error) {
 	provider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(res),
+		sdkmetric.WithResource(sessionResource(serviceName)),
 		sdkmetric.WithReader(reader),
 	)
 	meter := provider.Meter("com.anthropic.claude_code")
@@ -164,13 +188,51 @@ func (s *Session) AddActiveTime(ctx context.Context, activityType string, second
 	s.active.Add(ctx, seconds, s.attrs(attribute.String("type", activityType)))
 }
 
+// APIRequest имитирует один запрос к API: событие claude_code.api_request
+// с токенами по типам и те же токены в счётчике claude_code.token.usage.
+func (s *Session) APIRequest(ctx context.Context, model, querySource string, input, output, cacheRead, cacheCreation int64) {
+	for typ, n := range map[string]int64{"input": input, "output": output, "cacheRead": cacheRead, "cacheCreation": cacheCreation} {
+		if n > 0 {
+			s.AddTokens(ctx, typ, model, querySource, n)
+		}
+	}
+	if s.logger == nil {
+		return
+	}
+	var rec otellog.Record
+	rec.SetTimestamp(time.Now())
+	rec.SetBody(attribute.StringValue("claude_code.api_request"))
+	rec.AddAttributes(
+		attribute.String("event.name", "api_request"),
+		attribute.String("session.id", s.ID),
+		attribute.String("user.email", "synth@example.com"),
+		attribute.String("model", model),
+		attribute.String("query_source", querySource),
+		// Документация не говорит, числа это или строки, поэтому синтетика шлёт оба вида:
+		// конвейер обязан понимать и то, и другое.
+		attribute.Int64("input_tokens", input),
+		attribute.Int64("output_tokens", output),
+		attribute.String("cache_read_tokens", fmt.Sprint(cacheRead)),
+		attribute.Int64("cache_creation_tokens", cacheCreation),
+	)
+	s.logger.Emit(ctx, rec)
+}
+
 // Flush экспортирует накопленное немедленно, не дожидаясь интервала.
 func (s *Session) Flush(ctx context.Context) error {
+	if s.logs != nil {
+		if err := s.logs.ForceFlush(ctx); err != nil {
+			return err
+		}
+	}
 	return s.provider.ForceFlush(ctx)
 }
 
 // Close экспортирует остаток и завершает сессию: серии перестают обновляться,
 // как при выходе из Claude Code.
 func (s *Session) Close(ctx context.Context) error {
+	if s.logs != nil {
+		_ = s.logs.Shutdown(ctx)
+	}
 	return s.provider.Shutdown(ctx)
 }

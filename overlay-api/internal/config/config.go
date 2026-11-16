@@ -45,6 +45,18 @@ type Config struct {
 	Location         *time.Location
 	CORSOrigins      []string
 	Thresholds       map[string]Threshold
+	// Размер окна контекста в токенах: по умолчанию и по идентификатору модели.
+	ContextWindowDefault float64
+	ContextWindows       map[string]float64
+}
+
+// ContextWindow возвращает размер окна контекста модели.
+// Телеметрия его не сообщает, поэтому он задаётся в конфиге (ADR-0011).
+func (c Config) ContextWindow(model string) float64 {
+	if v, ok := c.ContextWindows[model]; ok {
+		return v
+	}
+	return c.ContextWindowDefault
 }
 
 // StaleAfter — возраст последней точки, после которого сессия не считается живой.
@@ -65,6 +77,8 @@ type file struct {
 	Timezone         *string              `yaml:"timezone"`
 	CORSOrigins      []string             `yaml:"cors_origins"`
 	Thresholds       map[string]Threshold `yaml:"thresholds"`
+	ContextWindow    *float64             `yaml:"context_window_tokens"`
+	ContextWindows   map[string]float64   `yaml:"context_windows"`
 }
 
 // Load читает настройки. path может быть пустым — тогда файл не используется.
@@ -76,8 +90,10 @@ func Load(path string, getenv func(string) string) (Config, error) {
 	poll, totals, export := "1s", "10s", "5s"
 	queryTimeout, lookback, slMaxAge := "3s", "168h", "10m"
 	tz := ""
+	contextWindow := 200000.0
 	f := file{
-		Listen: &listen, PrometheusURL: &promURL, JobRegex: &jobRegex, PipelineJob: &pipelineJob,
+		ContextWindow: &contextWindow,
+		Listen:        &listen, PrometheusURL: &promURL, JobRegex: &jobRegex, PipelineJob: &pipelineJob,
 		PollInterval: &poll, TotalsInterval: &totals, ExportInterval: &export,
 		QueryTimeout: &queryTimeout, BaselineLookback: &lookback, StatuslineMaxAge: &slMaxAge,
 		Timezone:    &tz,
@@ -115,12 +131,22 @@ func Load(path string, getenv func(string) string) (Config, error) {
 		f.CORSOrigins = strings.Split(v, ",")
 	}
 
+	if *f.ContextWindow <= 0 {
+		return Config{}, fmt.Errorf("context_window_tokens: ожидается положительное число")
+	}
+	for model, size := range f.ContextWindows {
+		if size <= 0 {
+			return Config{}, fmt.Errorf("context_windows[%s]: ожидается положительное число", model)
+		}
+	}
 	cfg := Config{
-		Listen:        *f.Listen,
-		PrometheusURL: strings.TrimRight(*f.PrometheusURL, "/"),
-		JobRegex:      *f.JobRegex,
-		PipelineJob:   *f.PipelineJob,
-		Thresholds:    f.Thresholds,
+		ContextWindowDefault: *f.ContextWindow,
+		ContextWindows:       f.ContextWindows,
+		Listen:               *f.Listen,
+		PrometheusURL:        strings.TrimRight(*f.PrometheusURL, "/"),
+		JobRegex:             *f.JobRegex,
+		PipelineJob:          *f.PipelineJob,
+		Thresholds:           f.Thresholds,
 	}
 	for name, d := range map[string]struct {
 		src string

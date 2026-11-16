@@ -214,14 +214,47 @@ func (b *Builder) session(ctx context.Context, id string, now time.Time) *Sessio
 		s.StartedAt, s.DurationSeconds = &start, &d
 	}
 
+	s.Context = b.context(ctx, id, s.Model, now)
+	return s
+}
+
+// context выбирает источник заполнения контекста: свежий status line точнее,
+// телеметрия работает там, где status line нет (расширение VS Code).
+func (b *Builder) context(ctx context.Context, id string, model *string, now time.Time) *Context {
+	var fromStatusline *Context
+	var window *float64
 	if c := b.statusline.Context(id); c != nil {
 		age := now.Sub(c.ReceivedAt)
-		s.Context = &Context{
-			UsedPercent: c.UsedPercent, WindowTokens: c.WindowSize,
+		window = c.WindowSize
+		fromStatusline = &Context{
+			UsedPercent: c.UsedPercent, WindowTokens: c.WindowSize, Source: "statusline",
 			AgeSeconds: age.Seconds(), Stale: age > b.cfg.StatuslineMaxAge,
 		}
+		if !fromStatusline.Stale {
+			return fromStatusline
+		}
 	}
-	return s
+
+	tokens := b.scalar(ctx, b.qb.SessionContextTokens(id))
+	if tokens == nil {
+		return fromStatusline // устаревшее значение лучше, чем никакого; оно помечено stale
+	}
+	if window == nil {
+		name := ""
+		if model != nil {
+			name = *model
+		}
+		size := b.cfg.ContextWindow(name)
+		window = &size
+	}
+	c := &Context{
+		UsedPercent: *tokens / *window * 100, Tokens: tokens, WindowTokens: window,
+		Source: "telemetry", Approximate: true,
+	}
+	if ts := b.scalar(ctx, b.qb.SessionContextTime(id)); ts != nil {
+		c.AgeSeconds = math.Max(0, now.Sub(time.UnixMilli(int64(*ts*1000))).Seconds())
+	}
+	return c
 }
 
 // topKey возвращает ключ с наибольшим значением. При positiveOnly нулевые значения не считаются.
@@ -297,7 +330,7 @@ func (b *Builder) addLimits(snap *Snapshot, now time.Time) {
 		return
 	}
 	age := now.Sub(l.ReceivedAt)
-	out := &Limits{AgeSeconds: age.Seconds(), Stale: age > b.cfg.StatuslineMaxAge}
+	out := &Limits{Source: l.Source, AgeSeconds: age.Seconds(), Stale: age > b.cfg.StatuslineMaxAge}
 	conv := func(in *statusline.Limit, threshold string) *Limit {
 		if in == nil {
 			return nil
@@ -307,10 +340,15 @@ func (b *Builder) addLimits(snap *Snapshot, now time.Time) {
 			left := in.ResetsAt.Sub(now).Seconds()
 			lim.ResetsInSeconds = &left
 		}
-		b.level(snap, threshold, in.UsedPercent)
+		if threshold != "" {
+			b.level(snap, threshold, in.UsedPercent)
+		}
 		return lim
 	}
 	out.FiveHour = conv(l.FiveHour, "five_hour_percent")
 	out.SevenDay = conv(l.SevenDay, "seven_day_percent")
+	for _, sc := range l.Scoped {
+		out.Scoped = append(out.Scoped, ScopedLimit{Label: sc.Label, Limit: *conv(&sc.Limit, "")})
+	}
 	snap.Limits = out
 }

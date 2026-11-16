@@ -33,6 +33,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/stream", s.cors(http.HandlerFunc(s.stream)))
 	// Без CORS: браузерным страницам писать сюда незачем, пишет только скрипт status line.
 	mux.HandleFunc("POST /api/v1/statusline", s.report)
+	mux.HandleFunc("POST /api/v1/usage", s.usage)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.Metrics.Registry, promhttp.HandlerOpts{}))
 	return mux
@@ -97,10 +98,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// report принимает отчёт скрипта status line.
-func (s *Server) report(w http.ResponseWriter, r *http.Request) {
+// accept — общая часть приёма отчётов: проверки запроса, разбор, проверка содержимого, учёт в метрике.
+// store вызывается только для корректного отчёта.
+func accept[T interface{ Validate() error }](s *Server, source string, w http.ResponseWriter, r *http.Request, store func(T)) {
 	reject := func(code int, msg string) {
-		s.Metrics.Reports.WithLabelValues("rejected").Inc()
+		s.Metrics.Reports.WithLabelValues(source, "rejected").Inc()
 		http.Error(w, msg, code)
 	}
 	// Страница в браузере может отправить POST на localhost без разрешения CORS.
@@ -113,18 +115,28 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 		reject(http.StatusUnsupportedMediaType, "ожидается Content-Type: application/json")
 		return
 	}
-	var rep statusline.Report
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReportBytes)).Decode(&rep); err != nil {
+	var body T
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReportBytes)).Decode(&body); err != nil {
 		reject(http.StatusBadRequest, "тело запроса не разобрано")
 		return
 	}
-	if err := rep.Validate(); err != nil {
+	if err := body.Validate(); err != nil {
 		reject(http.StatusBadRequest, err.Error())
 		return
 	}
-	s.Statusline.Put(rep, s.Now())
-	s.Metrics.Reports.WithLabelValues("accepted").Inc()
+	store(body)
+	s.Metrics.Reports.WithLabelValues(source, "accepted").Inc()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// report принимает отчёт скрипта status line.
+func (s *Server) report(w http.ResponseWriter, r *http.Request) {
+	accept(s, "statusline", w, r, func(rep statusline.Report) { s.Statusline.Put(rep, s.Now()) })
+}
+
+// usage принимает лимиты подписки из ответа Claude Code на команду /usage.
+func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
+	accept(s, "usage", w, r, func(u statusline.UsageReport) { s.Statusline.PutUsage(u, s.Now()) })
 }
 
 // healthz отвечает, что процесс жив. Состояние данных — в поле status снимка.

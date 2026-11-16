@@ -54,6 +54,9 @@ func TestFileThenEnv(t *testing.T) {
 	if len(cfg.CORSOrigins) != 2 || cfg.CORSOrigins[1] != "http://b" {
 		t.Errorf("origins: %q", cfg.CORSOrigins)
 	}
+	if cfg.ContextWindow("any-model") != 200000 {
+		t.Errorf("окно контекста по умолчанию: %v", cfg.ContextWindow("any-model"))
+	}
 	if got := cfg.Thresholds["context_percent"].Level(60); got != "warn" {
 		t.Errorf("уровень 60 при порогах 50/80: %s", got)
 	}
@@ -61,17 +64,29 @@ func TestFileThenEnv(t *testing.T) {
 
 func TestRejects(t *testing.T) {
 	cases := map[string]string{
-		"опечатка в ключе":        "pol_interval: 1s\n",
-		"нулевой интервал":        "poll_interval: 0s\n",
-		"звёздочка в CORS":        "cors_origins: ['*']\n",
-		"кавычка в job_regex":     "job_regex: 'a\"b'\n",
-		"неизвестный пояс":        "timezone: Mars/Olympus\n",
-		"длительность без единиц": "export_interval: '5'\n",
+		"опечатка в ключе":          "pol_interval: 1s\n",
+		"нулевой интервал":          "poll_interval: 0s\n",
+		"звёздочка в CORS":          "cors_origins: ['*']\n",
+		"кавычка в job_regex":       "job_regex: 'a\"b'\n",
+		"неизвестный пояс":          "timezone: Mars/Olympus\n",
+		"длительность без единиц":   "export_interval: '5'\n",
+		"нулевое окно контекста":    "context_window_tokens: 0\n",
+		"отрицательное окно модели": "context_windows: {m: -1}\n",
 	}
 	for name, body := range cases {
 		if _, err := Load(write(t, body), noEnv); err == nil {
 			t.Errorf("%s: ожидалась ошибка", name)
 		}
+	}
+}
+
+func TestContextWindowPerModel(t *testing.T) {
+	cfg, err := Load(write(t, "context_window_tokens: 150000\ncontext_windows:\n  big-model: 1000000\n"), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow("big-model") != 1000000 || cfg.ContextWindow("other") != 150000 {
+		t.Errorf("окна: %v %v", cfg.ContextWindow("big-model"), cfg.ContextWindow("other"))
 	}
 }
 
@@ -84,6 +99,7 @@ func TestShippedConfigMatchesDefaults(t *testing.T) {
 	def, _ := Load("", noEnv)
 	if shipped.PollInterval != def.PollInterval || shipped.TotalsInterval != def.TotalsInterval ||
 		shipped.ExportInterval != def.ExportInterval || shipped.BaselineLookback != def.BaselineLookback ||
+		shipped.ContextWindowDefault != def.ContextWindowDefault ||
 		shipped.JobRegex != def.JobRegex || shipped.PipelineJob != def.PipelineJob ||
 		strings.Join(shipped.CORSOrigins, ",") != strings.Join(def.CORSOrigins, ",") {
 		t.Errorf("config.yaml расходится со значениями по умолчанию:\n файл: %+v\n код:  %+v", shipped, def)

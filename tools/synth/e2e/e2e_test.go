@@ -363,13 +363,14 @@ func dig(v any, path ...string) any {
 	return v
 }
 
-// snapshotEventually ждёт, пока все перечисленные поля снимка примут ожидаемые значения.
-func snapshotEventually(t *testing.T, name string, want map[string]any) map[string]any {
+// snapshotWait ждёт до timeout, пока все перечисленные поля снимка примут ожидаемые значения.
+// Возвращает последний снимок и описание расхождения; пустая строка — совпало.
+func snapshotWait(t *testing.T, want map[string]any, timeout time.Duration) (map[string]any, string) {
 	t.Helper()
 	var snap map[string]any
 	var err error
 	var mismatch string
-	for start := time.Now(); time.Since(start) < deadline; time.Sleep(500 * time.Millisecond) {
+	for start := time.Now(); time.Since(start) < timeout; time.Sleep(500 * time.Millisecond) {
 		if snap, err = getSnapshot(t); err != nil {
 			mismatch = err.Error()
 			continue
@@ -388,12 +389,21 @@ func snapshotEventually(t *testing.T, name string, want map[string]any) map[stri
 			}
 		}
 		if mismatch == "" {
-			return snap
+			return snap, ""
 		}
 	}
-	raw, _ := json.MarshalIndent(snap, "  ", "  ")
-	t.Fatalf("%s: %s\n  снимок: %s", name, mismatch, raw)
-	return nil
+	return snap, mismatch
+}
+
+// snapshotEventually — то же, но расхождение по истечении срока завершает тест.
+func snapshotEventually(t *testing.T, name string, want map[string]any) map[string]any {
+	t.Helper()
+	snap, mismatch := snapshotWait(t, want, deadline)
+	if mismatch != "" {
+		raw, _ := json.MarshalIndent(snap, "  ", "  ")
+		t.Fatalf("%s: %s\n  снимок: %s", name, mismatch, raw)
+	}
+	return snap
 }
 
 // Сквозной путь до оверлея: synth → коллектор → Prometheus → overlay-api.
@@ -473,6 +483,32 @@ func TestSnapshot(t *testing.T) {
 		"levels.context_percent":        "warn",
 	})
 
+	// Лимиты из ответа на /usage (ADR-0010) заменяют лимиты status line, включая лимит по модели.
+	usage := fmt.Sprintf(`{"limits":[
+		{"kind":"session","percent":38,"resets_at":%q},
+		{"kind":"weekly_all","percent":7,"resets_at":%q},
+		{"kind":"weekly_scoped","percent":10,"resets_at":%q,"scope":{"model":{"display_name":"Fable"},"surface":null}}]}`,
+		time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+		time.Now().Add(72*time.Hour).UTC().Format(time.RFC3339Nano),
+		time.Now().Add(72*time.Hour).UTC().Format(time.RFC3339Nano))
+	resp, err = http.Post(env(t, "OVERLAY_API_URL")+"/api/v1/usage", "application/json", bytes.NewBufferString(usage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("отчёт /usage: HTTP %d", resp.StatusCode)
+	}
+	snap = snapshotEventually(t, "лимиты из /usage в снимке", map[string]any{
+		"limits.source":                 "usage",
+		"limits.five_hour.used_percent": 38.0,
+		"limits.seven_day.used_percent": 7.0,
+		"levels.five_hour_percent":      "ok",
+	})
+	if scoped, _ := dig(snap, "limits", "scoped").([]any); len(scoped) != 1 || dig(scoped[0], "label") != "Fable" || dig(scoped[0], "used_percent") != 10.0 {
+		t.Errorf("limits.scoped = %v", dig(snap, "limits", "scoped"))
+	}
+
 	// Обе сессии завершены: статус idle, блок сессии пуст, итоги за день остаются.
 	if err := a.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -488,7 +524,73 @@ func TestSnapshot(t *testing.T) {
 	})
 
 	// Собственные метрики сервиса попадают в Prometheus: проценты лимитов сохраняются в истории.
-	eventually(t, "лимит из status line в Prometheus",
+	eventually(t, "лимит в Prometheus (последним пришёл отчёт /usage)",
 		`cc_overlay_rate_limit_used_percent{window="five_hour"}`,
-		map[string]float64{`__name__=cc_overlay_rate_limit_used_percent,instance=overlay-api:8787,job=overlay-api,window=five_hour`: 93})
+		map[string]float64{`__name__=cc_overlay_rate_limit_used_percent,instance=overlay-api:8787,job=overlay-api,window=five_hour`: 38})
+}
+
+// Заполнение контекста для сессий без status line (расширение VS Code), ADR-0011:
+// событие api_request → метрика в коллекторе → оценка в снимке.
+func TestContextFromEvents(t *testing.T) {
+	endpoint := env(t, "SYNTH_OTLP_ENDPOINT")
+	waitTCP(t, endpoint)
+	ctx := context.Background()
+
+	id := fmt.Sprintf("ctx-%d", time.Now().UnixNano())
+	cfg := synth.Config{Endpoint: endpoint, Temporality: synth.Cumulative, Interval: exportInterval, ServiceName: snapshotService}
+	s, err := synth.NewSession(ctx, id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(ctx)
+
+	// Первый запрос основного диалога: 2000 + 30000 + 8000 = 40000 токенов на входе.
+	s.APIRequest(ctx, sonnet, "main", 2000, 500, 30000, 8000)
+	// Вспомогательный запрос к другой модели контекст основного диалога не описывает.
+	s.APIRequest(ctx, haiku, "auxiliary", 100, 20, 0, 0)
+	if err := s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	snapshotEventually(t, "оценка контекста по событию", map[string]any{
+		"session.id":                    id,
+		"session.context.source":        "telemetry",
+		"session.context.approximate":   true,
+		"session.context.tokens":        40000.0,
+		"session.context.window_tokens": 200000.0,
+		"session.context.used_percent":  20.0,
+		"levels.context_percent":        "ok",
+	})
+
+	// Контекст вырос: метрика показывает последний запрос, а не сумму.
+	// Запрос повторяется, если значение не дошло. Точка с более ранним временем, чем предыдущая,
+	// отбрасывается Prometheus, а часы WSL иногда переводятся назад на секунду-другую;
+	// в жизни такое значение исправляет следующий же запрос.
+	want := map[string]any{
+		"session.context.tokens":       150000.0,
+		"session.context.used_percent": 75.0,
+		"levels.context_percent":       "warn",
+	}
+	var mismatch string
+	for attempt := 1; attempt <= 5; attempt++ {
+		s.APIRequest(ctx, sonnet, "main", 1000, 0, 139000, 10000)
+		if err := s.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, mismatch = snapshotWait(t, want, 8*time.Second); mismatch == "" {
+			break
+		}
+		t.Logf("попытка %d: %s", attempt, mismatch)
+	}
+	if mismatch != "" {
+		t.Fatalf("контекст после следующего запроса: %s", mismatch)
+	}
+
+	// Приватность: метка user_email из события в метрику не попала.
+	for _, labels := range series(t, fmt.Sprintf(`claude_code_context_tokens{session_id="%s"}`, id)) {
+		for name := range labels {
+			if strings.HasPrefix(name, "user_") || name == "organization_id" {
+				t.Errorf("идентификатор %s в метрике контекста", name)
+			}
+		}
+	}
 }

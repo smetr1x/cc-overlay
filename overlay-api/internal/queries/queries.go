@@ -14,6 +14,8 @@ const (
 	tokens = "claude_code_token_usage_tokens_total"
 	cost   = "claude_code_cost_usage_USD_total"
 	active = "claude_code_active_time_seconds_total"
+	// Не метрика Claude Code: её строит коллектор из событий api_request (ADR-0011).
+	contextTokens = "claude_code_context_tokens"
 )
 
 // Builder хранит параметры, общие для всех запросов.
@@ -84,6 +86,16 @@ func (b Builder) SessionModelsTotal(id string) string {
 // SessionStart: время первой точки сессии. Подзапрос дорогой, результат кэшируется вызывающим.
 func (b Builder) SessionStart(id string) string {
 	return "min(min_over_time(timestamp(" + b.selector(tokens, session(id)) + ")[24h:30s]))"
+}
+
+// SessionContextTokens: входные токены последнего запроса основного диалога сессии.
+func (b Builder) SessionContextTokens(id string) string {
+	return "max(" + b.selector(contextTokens, session(id)) + ")"
+}
+
+// SessionContextTime: когда был этот запрос.
+func (b Builder) SessionContextTime(id string) string {
+	return "max(timestamp(" + b.selector(contextTokens, session(id)) + "))"
 }
 
 // WindowTokens: токены за окно без чтения кэша.

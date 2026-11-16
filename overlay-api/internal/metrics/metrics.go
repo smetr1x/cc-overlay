@@ -46,9 +46,9 @@ func New() *Metrics {
 			Help: "Заполнение окна контекста текущей сессии по данным status line.",
 		}),
 		Reports: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "cc_overlay_statusline_reports_total",
-			Help: "Отчёты status line по результату обработки.",
-		}, []string{"result"}),
+			Name: "cc_overlay_reports_total",
+			Help: "Принятые и отклонённые отчёты по источнику: statusline или usage.",
+		}, []string{"source", "result"}),
 	}
 	m.Registry.MustRegister(m.BuildDuration, m.QueryErrors, m.Status, m.SSEClients, m.RateLimit, m.Reports)
 	return m

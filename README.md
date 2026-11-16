@@ -10,47 +10,39 @@
 
 ```bash
 make up            # коллектор, Prometheus и overlay-api; при первом запуске создаёт .env
-# добавь блок env в ~/.claude/settings.json (ниже) и перезапусти Claude Code
+# добавь настройки в ~/.claude/settings.json (ниже) и перезапусти Claude Code
 make verify-real   # проверить, что метрики настоящей сессии дошли
 make snapshot      # то, что увидит оверлей
 make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (admin, пароль из .env)
 ```
 
-### Блок `env` для `~/.claude/settings.json`
+### Настройки Claude Code: `~/.claude/settings.json`
 
-Именно в пользовательском файле: в `.claude/settings.json` проекта переменные экспортёра игнорируются. Если ключ `env` уже есть, добавь строки в него.
+Именно в пользовательском файле: в `.claude/settings.json` проекта переменные экспортёра игнорируются. Ниже три ключа; если какой-то уже есть, добавь строки в него. Путь к репозиторию подставь свой.
 
 ```json
 {
   "env": {
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4317",
     "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
     "OTEL_METRIC_EXPORT_INTERVAL": "5000",
     "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "false"
-  }
-}
-```
-
-Что здесь важно:
-
-- `…TEMPORALITY_PREFERENCE=cumulative` — на этом построены все итоги ([ADR-0001](docs/adr/0001-temporality.md)). Без неё метрики в основной конвейер попадут некорректно.
-- `OTEL_METRIC_EXPORT_INTERVAL=5000` — по умолчанию 60 секунд, для оверлея слишком редко.
-- `OTEL_LOGS_EXPORTER` пока не задаётся: события понадобятся в фазе 4.
-- Не задавай `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, `OTEL_LOG_RAW_API_BODIES`, `OTEL_LOG_MANAGED_SETTINGS`: они включают сбор содержимого.
-
-Настройки читаются при старте Claude Code, после правки нужен перезапуск сессии.
-
-### Status line: лимиты подписки и контекст
-
-Процент 5-часового и недельного лимита и заполнение контекста через OpenTelemetry не передаются. Их получает скрипт status line и пересылает в overlay-api ([ADR-0009](docs/adr/0009-statusline-bridge.md)). Заодно в терминале появляется строка вида `Sonnet · ctx 18% · 5h 24% · 7d 41%`.
-
-Нужен `jq`: `sudo apt install jq`. Затем добавь в `~/.claude/settings.json` ключ `statusLine`, подставив свой путь к репозиторию:
-
-```json
-{
+  },
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "bash /путь/к/cc-overlay/hooks/cc-overlay-usage.sh", "async": true}]}
+    ],
+    "PostToolBatch": [
+      {"hooks": [{"type": "command", "command": "bash /путь/к/cc-overlay/hooks/cc-overlay-usage.sh", "async": true}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "bash /путь/к/cc-overlay/hooks/cc-overlay-usage.sh", "async": true}]}
+    ]
+  },
   "statusLine": {
     "type": "command",
     "command": "bash /путь/к/cc-overlay/statusline/cc-overlay-statusline.sh"
@@ -58,11 +50,28 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 }
 ```
 
-Скрипт отправляет только идентификатор сессии, название модели, стоимость, заполнение контекста и лимиты. Пути и имя репозитория, которые Claude Code тоже передаёт скрипту, наружу не уходят. Без этого шага оверлей работает, но поля `limits` и `context` остаются пустыми.
+После правки перезапусти Claude Code: настройки читаются при старте сессии. Для скриптов нужны `jq` и `curl` (`sudo apt install jq`).
 
-Status line запускается только в терминальном Claude Code. Расширение VS Code скрипт не вызывает: метрики от него приходят, а лимиты и контекст — нет. Лимиты общие для аккаунта, поэтому их обновляет любая сессия в терминале; при работе только в расширении значение через 10 минут помечается как устаревшее.
+Что делает каждый ключ:
 
-Настройка подхватывается при запуске сессии. Диагностика: `cat /tmp/cc-overlay-statusline.last` показывает время последнего запуска скрипта и код ответа сервиса (`204` — принято).
+| Ключ | Что даёт оверлею | Где работает |
+|---|---|---|
+| `env` | токены, стоимость, скорость, итоги; оценку заполнения контекста | терминал и расширение VS Code |
+| `hooks` | процент 5-часового и недельного лимита подписки | терминал и расширение VS Code |
+| `statusLine` | точное заполнение контекста и строку `Sonnet · ctx 18% · 5h 24% · 7d 41%` в терминале | только терминал |
+
+Подробности по переменным:
+
+- `…TEMPORALITY_PREFERENCE=cumulative` — на этом построены все итоги ([ADR-0001](docs/adr/0001-temporality.md)).
+- `OTEL_METRIC_EXPORT_INTERVAL=5000` — по умолчанию 60 секунд, для оверлея слишком редко.
+- `OTEL_LOGS_EXPORTER=otlp` — события нужны для оценки заполнения контекста. Они нигде не хранятся: коллектор берёт из них одно число ([ADR-0011](docs/adr/0011-context-from-events.md)).
+- Не задавай `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, `OTEL_LOG_RAW_API_BODIES`, `OTEL_LOG_MANAGED_SETTINGS`: они включают сбор содержимого.
+
+Про лимиты. Через OpenTelemetry они не передаются. Хук раз в минуту, пока ты работаешь, спрашивает их командой `claude -p "/usage"`; она не обращается к модели и токены не тратит ([ADR-0010](docs/adr/0010-usage-hook.md)). Хук запускается в фоне и ничего не печатает.
+
+Про контекст. В расширении VS Code точного значения нет, оверлей показывает оценку: токены последнего запроса, делённые на размер окна из `overlay-api/config.yaml` (200 000 по умолчанию). Если работаешь с окном в миллион токенов, добавь модель в `context_windows`, иначе процент будет завышен.
+
+Диагностика скриптов: `cat /tmp/cc-overlay-usage.last /tmp/cc-overlay-statusline.last` — время последнего запуска и код ответа сервиса (`204` — принято).
 
 ## Команды
 
@@ -114,6 +123,7 @@ prometheus/tests/            тесты семантики итогов (promtoo
 grafana/provisioning/        источники данных как код
 overlay-api/                 сервис показателей: снимок, SSE, приём status line
 statusline/                  скрипт status line для Claude Code
+hooks/                       хук Claude Code: лимиты подписки через /usage
 tools/synth/                 генератор синтетической телеметрии и e2e-тесты
 docs/                        архитектура, ADR, запросы, план
 ```

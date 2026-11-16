@@ -18,18 +18,20 @@ func TestDeltaMatchesTestedTemplate(t *testing.T) {
 
 func TestSelectorsFilterByJob(t *testing.T) {
 	for name, q := range map[string]string{
-		"LastSampleTime":      b.LastSampleTime(),
-		"SessionTotals":       b.SessionTotals(),
-		"SessionTokensByType": b.SessionTokensByType("x"),
-		"SessionCost":         b.SessionCost("x"),
-		"SessionActiveTime":   b.SessionActiveTime("x"),
-		"SessionModelsRecent": b.SessionModelsRecent("x", time.Minute),
-		"SessionModelsTotal":  b.SessionModelsTotal("x"),
-		"SessionStart":        b.SessionStart("x"),
-		"WindowTokens":        b.WindowTokens(time.Hour),
-		"WindowCacheRead":     b.WindowCacheRead(time.Hour),
-		"WindowCost":          b.WindowCost(time.Hour),
-		"WindowResets":        b.WindowResets(time.Hour),
+		"LastSampleTime":       b.LastSampleTime(),
+		"SessionTotals":        b.SessionTotals(),
+		"SessionTokensByType":  b.SessionTokensByType("x"),
+		"SessionCost":          b.SessionCost("x"),
+		"SessionActiveTime":    b.SessionActiveTime("x"),
+		"SessionModelsRecent":  b.SessionModelsRecent("x", time.Minute),
+		"SessionModelsTotal":   b.SessionModelsTotal("x"),
+		"SessionStart":         b.SessionStart("x"),
+		"SessionContextTokens": b.SessionContextTokens("x"),
+		"SessionContextTime":   b.SessionContextTime("x"),
+		"WindowTokens":         b.WindowTokens(time.Hour),
+		"WindowCacheRead":      b.WindowCacheRead(time.Hour),
+		"WindowCost":           b.WindowCost(time.Hour),
+		"WindowResets":         b.WindowResets(time.Hour),
 	} {
 		if !strings.Contains(q, `job=~"claude-code(-desktop)?"`) {
 			t.Errorf("%s не фильтрует по job: %s", name, q)

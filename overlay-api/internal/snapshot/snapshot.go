@@ -59,10 +59,17 @@ type Tokens struct {
 	CacheCreation float64 `json:"cache_creation"`
 }
 
-// Context — заполнение окна контекста по данным status line.
+// Context — заполнение окна контекста.
+//
+// Источник statusline даёт точный процент, но только в терминальном Claude Code.
+// Источник telemetry работает везде, включая расширение VS Code: число токенов берётся
+// из последнего запроса основного диалога, а размер окна — из конфига, поэтому это оценка.
 type Context struct {
 	UsedPercent  float64  `json:"used_percent"`
+	Tokens       *float64 `json:"tokens"` // только для источника telemetry
 	WindowTokens *float64 `json:"window_tokens"`
+	Source       string   `json:"source"` // statusline или telemetry
+	Approximate  bool     `json:"approximate"`
 	AgeSeconds   float64  `json:"age_seconds"`
 	Stale        bool     `json:"stale"`
 }
@@ -90,11 +97,21 @@ type Limit struct {
 	ResetsInSeconds *float64   `json:"resets_in_seconds"`
 }
 
-// Limits — лимиты подписки по данным status line.
+// ScopedLimit — недельный лимит отдельной модели или поверхности.
+type ScopedLimit struct {
+	Label string `json:"label"`
+	Limit
+}
+
+// Limits — лимиты подписки. Значения считает сервер Anthropic; сюда они попадают
+// из status line или из ответа на команду /usage.
 type Limits struct {
-	FiveHour   *Limit  `json:"five_hour"`
-	SevenDay   *Limit  `json:"seven_day"`
+	FiveHour *Limit        `json:"five_hour"`
+	SevenDay *Limit        `json:"seven_day"`
+	Scoped   []ScopedLimit `json:"scoped"`
+	Source   string        `json:"source"` // statusline или usage
+	// Сколько секунд назад получено значение.
 	AgeSeconds float64 `json:"age_seconds"`
-	// true, если status line давно не обновлялся: значение могло измениться.
+	// true, если значение давно не обновлялось и могло измениться.
 	Stale bool `json:"stale"`
 }

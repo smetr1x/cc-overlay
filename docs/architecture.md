@@ -9,6 +9,7 @@ flowchart TB
     subgraph WSL["WSL2"]
         CC["Claude Code<br/>temporality = cumulative"]
         SL["status line script"]
+        HOOK["хук: claude -p /usage"]
         subgraph compose["docker compose (порты только на 127.0.0.1)"]
             COL["otel-collector-contrib<br/>:4317 OTLP gRPC<br/>:8889 Prometheus exporter<br/>:13133 health_check"]
             PROM["Prometheus<br/>scrape 1s, retention 30d"]
@@ -23,12 +24,15 @@ flowchart TB
         OVL["overlay (Tauri 2)<br/>always-on-top, click-through"]
     end
 
-    CC -- "OTLP gRPC: metrics, logs" --> COL
+    CC -- "OTLP gRPC: метрики и события" --> COL
+    CC -. "запускает" .-> SL
+    CC -. "запускает" .-> HOOK
     COL -- "scrape /metrics" --> PROM
     COL -- "OTLP HTTP: logs" --> LOKI
     PROM -- "PromQL" --> API
     LOKI -- "LogQL" --> API
-    SL -- "POST rate_limits, context" --> API
+    SL -- "POST: лимиты, контекст (только терминал)" --> API
+    HOOK -- "POST: лимиты из /usage" --> API
     PROM --> GRAF
     LOKI --> GRAF
     API -- "SSE через 127.0.0.1" --> OVL
@@ -44,7 +48,8 @@ flowchart TB
 | Prometheus | хранение метрик 30 дней, PromQL | 9090 | 1 |
 | Grafana | история и дашборды, provisioning как код | 3000 | 1 (профиль `history`) |
 | overlay-api | считает показатели, отдаёт снимок и поток, принимает status line ([api.md](api.md)) | 8787 | 2 |
-| status line script | передаёт в overlay-api лимиты подписки и заполнение контекста | — | 2–3 |
+| status line script | передаёт в overlay-api лимиты и точное заполнение контекста; только терминальный Claude Code | — | 2 |
+| хук `/usage` | передаёт в overlay-api лимиты подписки при любом способе запуска, включая расширение VS Code ([ADR-0010](adr/0010-usage-hook.md)) | — | 2 |
 | overlay | окно поверх всех окон | — | 3 |
 | Loki | хранение событий | 3100 | 4 (профиль `history`) |
 
@@ -53,9 +58,11 @@ flowchart TB
 ## Конвейеры коллектора
 
 ```
-metrics: otlp → memory_limiter → transform/drop_ids → batch → prometheus
-logs:    otlp → memory_limiter → transform/drop_ids → batch → otlphttp/loki
+metrics: otlp, signal_to_metrics → memory_limiter → transform/drop_ids → batch → prometheus
+logs:    otlp → memory_limiter → transform/drop_ids → signal_to_metrics
 ```
+
+Конвейер логов заканчивается коннектором: из события `api_request` получается метрика заполнения контекста, сами события не хранятся ([ADR-0011](adr/0011-context-from-events.md)). Отправка событий в Loki добавится в фазе 4 вторым экспортёром.
 
 - `memory_limiter` стоит первым: он должен отказать во входе раньше, чем данные попадут в остальные процессоры.
 - В основном конвейере нет `delta_to_cumulative`: Claude Code шлёт cumulative ([ADR-0001](adr/0001-temporality.md)). Процессор стоит только в запасном конвейере `metrics/delta` на внутреннем порту 4319.

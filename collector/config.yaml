@@ -34,6 +34,21 @@ processors:
           - delete_key(datapoint.attributes, "user.account_id")
           - delete_key(datapoint.attributes, "user.id")
           - delete_key(datapoint.attributes, "organization.id")
+    # События нигде не хранятся: из них получается одна метрика (см. connectors).
+    # Удаление здесь — второй слой защиты и задел под хранение событий в фазе 4.
+    log_statements:
+      - context: log
+        statements:
+          - delete_key(log.attributes, "user.email")
+          - delete_key(log.attributes, "user.account_uuid")
+          - delete_key(log.attributes, "user.account_id")
+          - delete_key(log.attributes, "user.id")
+          - delete_key(log.attributes, "organization.id")
+          # Содержимое, которое появилось бы, если по ошибке включить OTEL_LOG_USER_PROMPTS и т. п.
+          - delete_key(log.attributes, "prompt")
+          - delete_key(log.attributes, "prompt_text")
+          - delete_key(log.attributes, "tool_parameters")
+          - delete_key(log.attributes, "tool_input")
 
   # Только в запасном конвейере. Состояние хранится в памяти:
   # рестарт коллектора или простой дольше max_stale обнуляют счётчик.
@@ -42,6 +57,30 @@ processors:
 
   batch:
     timeout: 200ms
+
+connectors:
+  # Заполнение контекста (ADR-0011). Событие api_request основного диалога превращается
+  # в метрику claude_code.context.tokens: сколько токенов было на входе последнего запроса.
+  # Это и есть занятая часть окна контекста; та же формула у поля used_percentage в status line.
+  # Так показатель доступен в сессиях расширения VS Code и не требует хранилища событий.
+  signal_to_metrics:
+    logs:
+      - name: claude_code.context.tokens
+        description: Input tokens of the latest main-conversation API request (context window usage).
+        include_resource_attributes:
+          - key: service.name
+        attributes:
+          - key: session.id
+        conditions:
+          - >-
+            (log.attributes["event.name"] == "api_request" or log.attributes["event.name"] == "claude_code.api_request")
+            and log.attributes["query_source"] == "main"
+        gauge:
+          # Double() принимает и числа, и строки: тип атрибутов в документации не оговорён.
+          value: >-
+            Double(log.attributes["input_tokens"])
+            + Double(log.attributes["cache_read_tokens"])
+            + Double(log.attributes["cache_creation_tokens"])
 
 exporters:
   prometheus:
@@ -71,9 +110,13 @@ service:
                 port: 8888
   pipelines:
     metrics:
-      receivers: [otlp]
+      receivers: [otlp, signal_to_metrics]
       processors: [memory_limiter, transform/drop_ids, batch]
       exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/drop_ids]
+      exporters: [signal_to_metrics]
     metrics/delta:
       receivers: [otlp/delta]
       processors: [memory_limiter, transform/drop_ids, delta_to_cumulative, batch]

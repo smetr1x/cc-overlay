@@ -63,6 +63,7 @@ check: .env ## Проверить конфиги: compose, коллектор, P
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < tools/synth/Dockerfile
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < overlay-api/Dockerfile
 	bash -n statusline/cc-overlay-statusline.sh
+	bash -n hooks/cc-overlay-usage.sh
 	bash -n tools/verify-real.sh
 
 go-cache:

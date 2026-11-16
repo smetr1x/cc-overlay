@@ -363,6 +363,83 @@ func TestTotalsAreCachedAndSessionStartIsCached(t *testing.T) {
 	}
 }
 
+func TestContextFromTelemetry(t *testing.T) {
+	f := newFixture(t)
+	f.sessions(sess{"a": {time.Second, 10}})
+	f.prom.set(f.qb.SessionModelsTotal("a"), lab("model", "big", 5))
+	f.prom.set(f.qb.SessionContextTokens("a"), val(150000))
+	f.prom.set(f.qb.SessionContextTime("a"), val(f.ts(40*time.Second)))
+
+	// Status line молчит (расширение VS Code): оценка по телеметрии и окну из конфига.
+	c := f.build().Session.Context
+	if c == nil || c.Source != "telemetry" || !c.Approximate || c.Stale {
+		t.Fatalf("контекст: %+v", c)
+	}
+	if c.UsedPercent != 75 || *c.Tokens != 150000 || *c.WindowTokens != 200000 || c.AgeSeconds != 40 {
+		t.Errorf("контекст: %+v", c)
+	}
+	if lvl := f.build().Levels["context_percent"]; lvl != "warn" {
+		t.Errorf("уровень: %q", lvl)
+	}
+
+	// Окно модели из конфига.
+	f.b.cfg.ContextWindows = map[string]float64{"big": 1000000}
+	if c = f.build().Session.Context; c.UsedPercent != 15 {
+		t.Errorf("с окном в миллион: %+v", c)
+	}
+
+	// Свежий status line точнее и имеет приоритет.
+	report := statusline.Report{SessionID: "a"}
+	report.Context = &struct {
+		UsedPercentage *float64 `json:"used_percentage"`
+		WindowSize     *float64 `json:"window_size"`
+	}{ptr(12.0), ptr(1000000.0)}
+	f.sl.Put(report, f.now)
+	if c = f.build().Session.Context; c.Source != "statusline" || c.UsedPercent != 12 || c.Approximate {
+		t.Errorf("приоритет status line: %+v", c)
+	}
+
+	// Status line устарел: снова телеметрия, а размер окна берётся из его отчёта.
+	f.now = f.now.Add(20 * time.Minute)
+	f.sessions(sess{"a": {time.Second, 10}})
+	f.b.cfg.ContextWindows = nil
+	if c = f.build().Session.Context; c.Source != "telemetry" || *c.WindowTokens != 1000000 || c.UsedPercent != 15 {
+		t.Errorf("после устаревания status line: %+v", c)
+	}
+}
+
+func TestLimitsFromUsageReport(t *testing.T) {
+	f := newFixture(t)
+	reset := f.now.Add(time.Hour).Format(time.RFC3339Nano)
+	f.sl.PutUsage(statusline.UsageReport{Limits: []statusline.UsageRow{
+		{Kind: "session", Percent: 75, ResetsAt: &reset},
+		{Kind: "weekly_all", Percent: 7},
+		{Kind: "weekly_scoped", Percent: 10, Scope: &struct {
+			Model *struct {
+				DisplayName string `json:"display_name"`
+			} `json:"model"`
+			Surface *struct {
+				DisplayName string `json:"display_name"`
+			} `json:"surface"`
+		}{Model: &struct {
+			DisplayName string `json:"display_name"`
+		}{"Fable"}}},
+	}}, f.now.Add(-5*time.Second))
+
+	l := f.build().Limits
+	if l == nil || l.Source != "usage" || l.FiveHour.UsedPercent != 75 || l.SevenDay.UsedPercent != 7 {
+		t.Fatalf("лимиты: %+v", l)
+	}
+	eq(t, "resets_in_seconds", l.FiveHour.ResetsInSeconds, 3600.0)
+	if len(l.Scoped) != 1 || l.Scoped[0].Label != "Fable" || l.Scoped[0].UsedPercent != 10 {
+		t.Errorf("лимит по модели: %+v", l.Scoped)
+	}
+	if lvl := f.build().Levels; lvl["five_hour_percent"] != "warn" || lvl["seven_day_percent"] != "" {
+		// порог недельного лимита в этой фикстуре не задан
+		t.Errorf("уровни: %v", lvl)
+	}
+}
+
 func TestStatuslineLimitsAndContext(t *testing.T) {
 	f := newFixture(t)
 	f.sessions(sess{"a": {time.Second, 10}})

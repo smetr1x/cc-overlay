@@ -64,6 +64,65 @@ func TestLimitsSurviveReportWithoutThem(t *testing.T) {
 	}
 }
 
+func TestUsageReport(t *testing.T) {
+	// Форма ответа Claude Code 2.1.312 на `claude -p "/usage"`.
+	body := `{"limits":[
+		{"kind":"session","group":"session","percent":38,"resets_at":"2026-11-17T14:09:59.624090+00:00","scope":null,"severity":"normal","is_active":true},
+		{"kind":"weekly_all","group":"weekly","percent":7,"resets_at":"2026-11-22T09:59:59.624110+00:00","scope":null},
+		{"kind":"weekly_scoped","group":"weekly","percent":10,"resets_at":"2026-11-22T09:59:59.624442+00:00","scope":{"model":{"display_name":"Fable"},"surface":null}},
+		{"kind":"something_new","percent":1}],
+		"extra_usage":{"is_enabled":false}}`
+	var u UsageReport
+	if err := json.Unmarshal([]byte(body), &u); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore()
+	s.PutUsage(u, t0)
+
+	l := s.Limits(t0.Add(time.Minute))
+	if l == nil || l.Source != "usage" {
+		t.Fatalf("лимиты: %+v", l)
+	}
+	if l.FiveHour == nil || l.FiveHour.UsedPercent != 38 || l.FiveHour.ResetsAt.UTC().Hour() != 14 {
+		t.Errorf("5 часов (kind=session): %+v", l.FiveHour)
+	}
+	if l.SevenDay == nil || l.SevenDay.UsedPercent != 7 {
+		t.Errorf("неделя (kind=weekly_all): %+v", l.SevenDay)
+	}
+	if len(l.Scoped) != 1 || l.Scoped[0].Label != "Fable" || l.Scoped[0].UsedPercent != 10 {
+		t.Errorf("лимит по модели: %+v", l.Scoped)
+	}
+
+	// Пятичасовое окно сбросилось: его процент больше не отдаётся, недельные остаются.
+	l = s.Limits(t0.Add(3 * time.Hour))
+	if l == nil || l.FiveHour != nil || l.SevenDay == nil || len(l.Scoped) != 1 {
+		t.Errorf("после сброса окна: %+v", l)
+	}
+
+	// Status line обновляет общие лимиты и не стирает лимит по модели, которого сам не знает.
+	s.Put(parse(t, `{"session_id":"a","rate_limits":{"five_hour":{"used_percentage":40}}}`), t0.Add(time.Minute))
+	l = s.Limits(t0.Add(2 * time.Minute))
+	if l.Source != "statusline" || l.FiveHour.UsedPercent != 40 || len(l.Scoped) != 1 {
+		t.Errorf("после отчёта status line: %+v", l)
+	}
+
+	for name, bad := range map[string]string{
+		"пусто":              `{"limits":[]}`,
+		"нет kind":           `{"limits":[{"percent":1}]}`,
+		"процент":            `{"limits":[{"kind":"session","percent":-5}]}`,
+		"дата":               `{"limits":[{"kind":"session","percent":5,"resets_at":"завтра"}]}`,
+		"null вместо списка": `{"limits":null}`,
+	} {
+		var u UsageReport
+		if err := json.Unmarshal([]byte(bad), &u); err == nil && u.Validate() == nil {
+			t.Errorf("%s: должно быть отклонено", name)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
 	bad := []string{
 		`{"session_id":""}`,
