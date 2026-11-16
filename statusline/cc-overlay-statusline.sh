@@ -32,10 +32,17 @@ payload=$(jq -c '{
 
 # Строка должна появляться мгновенно, поэтому на отправку отводится 0,3 с,
 # а её неудача (сервис остановлен) ни на что не влияет.
+# --noproxy: если в окружении задан http_proxy, curl иначе отправил бы запрос к 127.0.0.1 через прокси.
+code="-"
 if [[ -n "$payload" ]]; then
-  curl -s -o /dev/null -m 0.3 -H 'Content-Type: application/json' \
-    -d "$payload" "$api/api/v1/statusline" || true
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 0.3 --noproxy '*' \
+    -H 'Content-Type: application/json' -d "$payload" "$api/api/v1/statusline" 2>/dev/null) || true
 fi
+
+# След последнего запуска для диагностики: время, код ответа сервиса (204 — принято, 000 — не достучались).
+# Содержимое JSON сюда не пишется.
+printf '%s http=%s payload_bytes=%s\n' "$(date '+%F %T')" "${code:--}" "${#payload}" \
+  > "${TMPDIR:-/tmp}/cc-overlay-statusline.last" 2>/dev/null || true
 
 # Поля, которых ещё нет (лимиты появляются после первого ответа API), просто пропускаются.
 jq -r '
