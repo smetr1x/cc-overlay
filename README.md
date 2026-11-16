@@ -2,7 +2,7 @@
 
 Живой мониторинг расхода Claude Code: оверлей поверх окон Windows и история в Grafana. Всё работает локально, наружу ничего не уходит.
 
-Состояние: готовы фазы 1 и 2 — пайплайн метрик и overlay-api. Окна оверлея пока нет: данные можно смотреть командой `make snapshot`. Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
+Состояние: готовы пайплайн метрик, overlay-api и интерфейс оверлея, который пока открывается в браузере (`make overlay-dev`). Окно поверх всех окон появится после установки тулчейна Windows ([docs/windows-toolchain.md](docs/windows-toolchain.md)). Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
 
 ## Быстрый старт
 
@@ -81,9 +81,10 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 | `make down` | остановить; данные в томах сохраняются |
 | `make restart` | перезапустить после правки конфигов |
 | `make snapshot` | текущий снимок overlay-api |
+| `make overlay-dev` | интерфейс оверлея в браузере, http://127.0.0.1:1420; клавиша `c` — компактный режим |
 | `make logs`, `make ps` | логи и состояние контейнеров |
 | `make check` | проверить конфиги: compose, коллектор, Prometheus, YAML, Dockerfile |
-| `make test` | тесты семантики PromQL, форматирование и unit-тесты Go |
+| `make test` | тесты семантики PromQL, unit-тесты Go, проверка типов, тесты и сборка фронтенда |
 | `make test-e2e` | сквозной тест на синтетике в отдельном compose-проекте |
 | `make verify-real` | проверить данные настоящей сессии Claude Code |
 | `make synth` | минута синтетики в рабочий стек, для просмотра графиков |
@@ -100,6 +101,7 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 | 13133 | коллектор, health check |
 | 9090 | Prometheus |
 | 8787 | overlay-api: снимок, поток, приём status line ([docs/api.md](docs/api.md)) |
+| 1420 | интерфейс оверлея в режиме разработки (`make overlay-dev`) |
 | 3000 | Grafana (профиль `history`) |
 
 ## Данных нет — что проверить
@@ -122,6 +124,7 @@ prometheus/prometheus.yml    цели и интервалы сбора
 prometheus/tests/            тесты семантики итогов (promtool)
 grafana/provisioning/        источники данных как код
 overlay-api/                 сервис показателей: снимок, SSE, приём status line
+overlay/                     интерфейс оверлея (TypeScript, Vite); оболочка окна Tauri — в работе
 statusline/                  скрипт status line для Claude Code
 hooks/                       хук Claude Code: лимиты подписки через /usage
 tools/synth/                 генератор синтетической телеметрии и e2e-тесты

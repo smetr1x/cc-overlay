@@ -1,0 +1,123 @@
+/* Оверлей в духе MSI Afterburner: моноширинный шрифт, плотные строки, цвет несёт уровень. */
+:root {
+  --panel: rgb(12 14 18 / 0.72);
+  --text: #e8eaed;
+  --label: #8b93a1;
+  --ok: #7ee787;
+  --warn: #f2cc60;
+  --crit: #ff7b72;
+  --muted: #6e7681;
+  --track: rgb(255 255 255 / 0.12);
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+html,
+body {
+  margin: 0;
+  /* Прозрачный фон страницы: в окне оверлея сквозь него виден рабочий стол. */
+  background: transparent;
+  user-select: none;
+}
+
+#overlay {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 250px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  /* Тень под текстом сохраняет читаемость поверх светлых окон. */
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.9);
+}
+
+.title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.banner {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.banner-info {
+  color: var(--label);
+  background: rgb(255 255 255 / 0.06);
+}
+.banner-warn {
+  color: #1b1500;
+  background: var(--warn);
+  text-shadow: none;
+}
+.banner-crit {
+  color: #1d0504;
+  background: var(--crit);
+  text-shadow: none;
+}
+
+.row-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  white-space: nowrap;
+}
+.row-label {
+  color: var(--label);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.row-text {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.row-hint {
+  color: var(--label);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bar {
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: var(--track);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transition: width 0.4s ease;
+}
+
+.tone-ok .row-text,
+.tone-ok .bar {
+  color: var(--ok);
+}
+.tone-warn .row-text,
+.tone-warn .bar {
+  color: var(--warn);
+}
+.tone-crit .row-text,
+.tone-crit .bar {
+  color: var(--crit);
+}
+.tone-muted .row-text,
+.tone-muted .bar {
+  color: var(--muted);
+}
+
+body.compact #overlay {
+  min-width: 190px;
+  gap: 3px;
+  padding: 6px 10px;
+}
+body.compact .title {
+  display: none;
+}

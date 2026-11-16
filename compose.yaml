@@ -64,6 +64,25 @@ services:
       timeout: 3s
       retries: 6
 
+  # Node-окружение фронтенда оверлея: тесты, сборка и просмотр в браузере (make overlay-dev).
+  # Само окно оверлея собирается на Windows; здесь проверяется всё, что от окна не зависит.
+  overlay-dev:
+    image: node:24.22.3-alpine3.24
+    profiles: ["dev"]
+    working_dir: /app
+    environment:
+      OVERLAY_DEV_HOST: 0.0.0.0
+      OVERLAY_DEV_POLL: "1"
+      OVERLAY_API_PROXY: http://overlay-api:8787
+    volumes:
+      - ./overlay:/app
+      # Отдельный том: зависимости для Linux не должны смешиваться с node_modules,
+      # которые на том же диске создаёт npm под Windows.
+      - overlay-node-modules:/app/node_modules
+    ports:
+      - "127.0.0.1:1420:1420"
+    command: ["sh", "-c", "npm ci && npm run dev"]
+
   grafana:
     image: grafana/grafana:13.2.6
     profiles: ["history"]
@@ -100,5 +119,6 @@ networks:
         - subnet: ${CC_OVERLAY_SUBNET:-10.210.0.0/24}
 
 volumes:
+  overlay-node-modules:
   prometheus-data:
   grafana-data:

@@ -9,13 +9,15 @@ E2E := CC_OVERLAY_SUBNET=$(E2E_SUBNET) docker compose -p cc-overlay-e2e -f compo
 # Go запускается в контейнере (ADR-0003); в репозитории два модуля.
 GO_API := $(E2E) run --rm --no-deps -w /repo/overlay-api go
 GO_SYNTH := $(E2E) run --rm --no-deps -w /repo/tools/synth go
+# Node тоже в контейнере; зависимости лежат в томе рабочего проекта, чтобы не ставить их на каждый прогон.
+NODE := $(COMPOSE) --profile dev run --rm --no-deps overlay-dev
 
 # Образы линтеров. Версии сервисов стека закреплены в compose.yaml.
 YAMLLINT_IMAGE := cytopia/yamllint:1-0.14
 HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine
 SYNTH_IMAGE := cc-overlay/synth:dev
 
-.PHONY: restart fmt go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy snapshot
+.PHONY: overlay-dev overlay-lock restart fmt go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy snapshot
 
 help: ## Показать список команд
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -79,6 +81,7 @@ test: .env go-cache ## Быстрые тесты без запуска стек�
 	$(GO_API) go test -count=1 ./...
 	$(GO_SYNTH) go vet -tags e2e ./...
 	$(GO_SYNTH) go test -count=1 ./...
+	$(NODE) sh -c "npm ci --no-audit --no-fund && npm run typecheck && npm test && npm run build"
 
 test-e2e: .env go-cache ## Сквозной тест на синтетике: synth → коллектор → Prometheus → overlay-api
 	@$(E2E) down -v --remove-orphans >/dev/null 2>&1 || true
@@ -88,6 +91,12 @@ test-e2e: .env go-cache ## Сквозной тест на синтетике: sy
 	if [ $$status -ne 0 ]; then $(E2E) logs --tail=40 otel-collector overlay-api; fi; \
 	$(E2E) down -v --remove-orphans >/dev/null 2>&1; \
 	exit $$status
+
+overlay-dev: .env ## Интерфейс оверлея в браузере: http://127.0.0.1:1420 (нужен запущенный стек)
+	$(COMPOSE) --profile dev run --rm --no-deps --service-ports overlay-dev
+
+overlay-lock: .env ## Обновить overlay/package-lock.json после правки зависимостей
+	$(NODE) npm install --no-audit --no-fund
 
 verify-real: ## Проверить, что метрики настоящей сессии Claude Code дошли до Prometheus
 	@bash tools/verify-real.sh
