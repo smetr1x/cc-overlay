@@ -545,9 +545,11 @@ func TestContextFromEvents(t *testing.T) {
 	defer s.Close(ctx)
 
 	// Первый запрос основного диалога: 2000 + 30000 + 8000 = 40000 токенов на входе.
-	s.APIRequest(ctx, sonnet, "main", 2000, 500, 30000, 8000)
-	// Вспомогательный запрос к другой модели контекст основного диалога не описывает.
+	// query_source "sdk" — так основной диалог помечает расширение VS Code.
+	s.APIRequest(ctx, sonnet, "sdk", 2000, 500, 30000, 8000)
+	// Вспомогательный запрос и субагент контекст основного диалога не описывают.
 	s.APIRequest(ctx, haiku, "auxiliary", 100, 20, 0, 0)
+	s.APIRequest(ctx, sonnet, "subagent", 500, 20, 90000, 0)
 	if err := s.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -71,12 +71,16 @@ connectors:
           - key: service.name
         attributes:
           - key: session.id
+        # Основной диалог помечен query_source "main" в терминале и "sdk" в расширении VS Code
+        # (расширение запускает Claude Code через SDK). Значение "sdk" в документации не описано,
+        # найдено на настоящих событиях. Субагенты и вспомогательные запросы сюда не входят:
+        # у них свой контекст.
         conditions:
           - >-
-            (log.attributes["event.name"] == "api_request" or log.attributes["event.name"] == "claude_code.api_request")
-            and log.attributes["query_source"] == "main"
+            log.attributes["event.name"] == "api_request"
+            and (log.attributes["query_source"] == "main" or log.attributes["query_source"] == "sdk")
         gauge:
-          # Double() принимает и числа, и строки: тип атрибутов в документации не оговорён.
+          # У настоящего Claude Code это целые числа; Double() на случай, если тип изменится.
           value: >-
             Double(log.attributes["input_tokens"])
             + Double(log.attributes["cache_read_tokens"])
