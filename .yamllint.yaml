@@ -1,0 +1,11 @@
+extends: default
+
+rules:
+  line-length:
+    max: 140
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  # Ключ `on:` в GitHub Actions yamllint принимает за булево значение.
+  truthy:
+    check-keys: false

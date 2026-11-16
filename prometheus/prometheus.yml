@@ -1,0 +1,27 @@
+# Prometheus для cc-overlay. Срок хранения (30d) задан флагом в compose.yaml.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Метрики Claude Code. Интервал 1s нетипичен и оправдан бюджетом задержки
+  # оверлея в 2 секунды (docs/architecture.md); серий здесь десятки.
+  # Имя задания намеренно не "claude-code": с honor_labels служебные метрики цели (up и др.)
+  # иначе смешались бы с сериями самого Claude Code, у которых job приходит из service.name.
+  - job_name: collector-export
+    scrape_interval: 1s
+    scrape_timeout: 1s
+    # Метки job и instance приходят из resource-атрибутов источника (service.name).
+    # honor_labels сохраняет их вместо переименования в exported_job.
+    honor_labels: true
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # Собственные метрики коллектора.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

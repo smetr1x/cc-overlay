@@ -1,12 +1,12 @@
 # Запросы для показателей оверлея
 
-Имена метрик — ожидаемые, фактические фиксируются в фазе 1 ([telemetry-verification.md](telemetry-verification.md), строка 10). Запросы выполняет overlay-api; подстановки в фигурных скобках делает он же.
+Имена метрик проверены в фазе 1 на синтетике ([telemetry-verification.md](telemetry-verification.md)). Шаблон «итог за окно» и страж покрыты тестами в `prometheus/tests/totals_test.yml`. Запросы выполняет overlay-api; подстановки в фигурных скобках делает он же.
 
 Обозначения:
 
 - `T` — `claude_code_token_usage_tokens_total`
 - `C` — `claude_code_cost_usage_USD_total`
-- `A` — `claude_code_active_time_total_seconds_total`
+- `A` — `claude_code_active_time_seconds_total`
 - `{X}` — `session_id` текущей сессии
 - `{W}` — длина окна, например `5h` или `43200s`
 - `{L}` — глубина поиска значения до начала окна, `7d`
@@ -161,7 +161,9 @@ time() - max(timestamp(T))
 
 Работает только при `send_timestamps: true` в экспортёре коллектора: иначе `timestamp()` возвращает время scrape, а не время точки. Значение больше 10 секунд (два интервала экспорта) при живой сессии означает статус `stale`.
 
-Здоровье конвейера проверяется отдельно: `up{job="otel-collector"}` и `up{job="overlay-api"}`.
+Здоровье конвейера проверяется отдельно: `up{job="collector-export"}`, `up{job="otel-collector"}` и `up{job="overlay-api"}`.
+
+Все запросы оверлея фильтруются по `job=~"claude-code(-desktop)?"`: метка приходит из `service.name` источника и отсекает синтетику (`claude-code-synth`).
 
 ## Фаза 4: показатели из событий
 

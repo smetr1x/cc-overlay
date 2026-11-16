@@ -23,7 +23,7 @@
 | 7 | Пять событий | Событий больше двадцати. Важные для нас: `api_refusal`, `api_retries_exhausted`, `assistant_response`, `compaction` (`pre_tokens`, `post_tokens`), `subagent_completed`. У `api_request` есть `cost_usd_micros`, `cache_creation_5m_tokens`, `cache_creation_1h_tokens`, `request_id`. Порядок событий задаёт `event.sequence` (счётчик на процесс, не на сессию) | `compaction` нужен для оценки контекста в фазе 4 |
 | 8 | Четыре переменные приватности | Есть ещё `OTEL_LOG_TOOL_CONTENT` и `OTEL_LOG_MANAGED_SETTINGS`. `OTEL_LOG_ASSISTANT_RESPONSES`, если не задана, наследует значение `OTEL_LOG_USER_PROMPTS` | Список в README и runbook расширяем до шести |
 | 9 | Вычищать `user.email` | На точках и событиях также `user.account_uuid`, `user.account_id`, `user.id`, `organization.id`. Первые два отключаются у источника: `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false` | Удаляем все пять — [ADR-0008](adr/0008-privacy.md) |
-| 10 | Имена метрик в Prometheus «проверь» | В `prometheusexporter` опция `add_metric_suffixes` устарела и игнорируется, вместо неё `translation_strategy`. `resource_to_telemetry_conversion` устарела в пользу `resource_constant_labels` | Ожидаемые имена: `claude_code_token_usage_tokens_total`, `claude_code_cost_usage_USD_total`, `claude_code_active_time_total_seconds_total`, `claude_code_session_count_total`. Фактические фиксируются в фазе 1 |
+| 10 | Имена метрик в Prometheus «проверь» | В `prometheusexporter` опция `add_metric_suffixes` устарела и игнорируется, вместо неё `translation_strategy`. `resource_to_telemetry_conversion` устарела в пользу `resource_constant_labels` | Ожидаемые имена: `claude_code_token_usage_tokens_total`, `claude_code_cost_usage_USD_total`, `claude_code_session_count_total`. Фактические имена — в разделе «Результаты фазы 1» |
 | 11 | `session.count` с атрибутом `start_type` | Значения: `fresh`, `resume`, `continue`, `agents_view`. У `lines_of_code.count` есть `model`; у `code_edit_tool.decision` — `source` и `language` | Уточнение |
 | 12 | «Настройки читаются только при старте» | Прямого утверждения в документации нет. Есть только описание того, что конфликтующие переменные удаляются «at startup» | Считаем допущением, проверяем в фазе 1 |
 | 13 | `service.name` не упомянут | `claude-code` для терминала, `claude-code-desktop` для вкладки Code в Claude Desktop | Фильтры пишем как `service_name=~"claude-code.*"` |
@@ -38,14 +38,31 @@
 - `OTEL_METRICS_INCLUDE_SESSION_ID` по умолчанию `true`.
 - Resource-атрибуты: `service.name`, `service.version`, `os.type`, `os.version`, `host.arch`, `wsl.version`.
 
-## Что проверить экспериментом в фазе 1
+## Результаты фазы 1
 
-Документация на эти вопросы не отвечает, а от ответов зависит дизайн.
+Проверено на синтетике (`make test-e2e`, collector-contrib 0.165.0, Prometheus v3.16.0) и на рабочем стеке.
 
-1. **Переэкспортирует ли SDK неизменившиеся cumulative-точки каждый интервал.** От этого зависит определение состояния «данные устарели» ([ADR-0001](adr/0001-temporality.md)).
-2. **Сохраняется ли `session.id` при `claude --resume` и `--continue`.** Если сохраняется, счётчик новой серии начнётся с нуля под старым id — это сброс, который должен поймать страж `resets()` ([ADR-0007](adr/0007-totals-semantics.md)).
-3. **Фактические имена метрик и меток** после `prometheusexporter` закреплённой версии.
-4. **Нужен ли перезапуск Claude Code** после правки блока `env`.
-5. **Работает ли проброс `127.0.0.1` из WSL в Windows** для портов, опубликованных Docker Engine внутри WSL.
+| Вопрос | Результат |
+|---|---|
+| Имена метрик после `prometheusexporter` | `claude_code_token_usage_tokens_total`, `claude_code_cost_usage_USD_total`, `claude_code_session_count_total`, **`claude_code_active_time_seconds_total`** — не `…_total_seconds_total`, как ожидалось в фазе 0: экспортёр не дублирует `total` |
+| Метки серий | `job` (из `service.name`), `instance`, `session_id`, `type`, `model`, `query_source`, `start_type`, `terminal_type`, `otel_scope_name`. Точки в именах заменены подчёркиваниями |
+| Удаление идентификаторов | ни один из пяти до Prometheus не доходит, в обоих конвейерах |
+| Cumulative-путь | итоги двух параллельных сессий сходятся до токена; молчащая живая сессия обновляет временную метку каждый интервал; после завершения процесса метка останавливается |
+| Запасной delta-путь | те же итоги через `delta_to_cumulative` |
+| Проброс `127.0.0.1` из WSL в Windows | работает в режиме NAT: `curl.exe` из Windows получает ответ Prometheus и коллектора. `.wslconfig` менять не нужно |
+| Имена в конфиге коллектора | процессор теперь называется `delta_to_cumulative` (старое имя — устаревший псевдоним); пути OTTL требуют префикса контекста: `datapoint.attributes` |
 
-Поведение `deltatocumulative` при out-of-order точках и рестарте коллектора README не описывает. Так как процессор исключён из основного пути, это проверяется только в рамках запасного сценария.
+Найдено по ходу:
+
+- **Docker не мог создать сеть**: `all predefined address pools have been fully subnetted`. Причина — VPN с маршрутами на всё адресное пространство. Подсеть задана явно в `compose.yaml`.
+- **Имя задания scrape не должно совпадать с `service.name` источника.** При `honor_labels: true` служебные метрики цели (`up`) смешивались с сериями Claude Code. Задание называется `collector-export`.
+
+## Что осталось проверить на настоящей сессии
+
+Синтетика использует Go SDK, а Claude Code — другой SDK, поэтому три вопроса закрываются только реальной сессией. Команда `make verify-real` выводит всё нужное.
+
+1. **Переэкспортирует ли Claude Code неизменившиеся cumulative-точки каждый интервал** (раздел 5 вывода). От этого зависит определение состояния «данные устарели» ([ADR-0001](adr/0001-temporality.md)).
+2. **Сохраняется ли `session.id` при `claude --resume` и `--continue`** и сбрасывается ли счётчик (раздел 6 вывода, [ADR-0007](adr/0007-totals-semantics.md)).
+3. **Совпадают ли имена метрик и меток настоящего Claude Code** с таблицей выше (разделы 1–2 вывода).
+
+Нужен ли перезапуск Claude Code после правки блока `env`, документация прямо не говорит; README рекомендует перезапуск.

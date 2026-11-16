@@ -1,0 +1,80 @@
+# Стек cc-overlay. Все порты публикуются только на 127.0.0.1.
+# Версии образов закреплены; обновление — отдельным коммитом после `make check test-e2e`.
+name: cc-overlay
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      # Мягкий предел кучи Go ниже mem_limit: сборщик мусора начинает работать раньше,
+      # чем ядро убьёт контейнер.
+      GOMEMLIMIT: 120MiB
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC: сюда пишет Claude Code
+      - "127.0.0.1:13133:13133" # health_check
+    mem_limit: 160m
+    restart: unless-stopped
+    # В образе нет shell, поэтому healthcheck средствами compose невозможен.
+    # Готовность проверяет `make wait` через порт 13133, а в работе — Prometheus (метрика up).
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    mem_limit: 160m
+    restart: unless-stopped
+    depends_on:
+      - otel-collector
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    profiles: ["history"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?задай GRAFANA_ADMIN_PASSWORD в .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    mem_limit: 200m
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+# Подсеть задана явно. Автовыбор Docker отказывает («all predefined address pools have been
+# fully subnetted»), когда VPN держит маршруты на всё адресное пространство; явная подсеть
+# эту проверку обходит. При конфликте адресов поменяй CC_OVERLAY_SUBNET в .env.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${CC_OVERLAY_SUBNET:-10.210.0.0/24}
+
+volumes:
+  prometheus-data:
+  grafana-data:

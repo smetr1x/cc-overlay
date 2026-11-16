@@ -40,7 +40,7 @@ flowchart TB
 
 | Компонент | Роль | Порт (127.0.0.1) | Фаза |
 |---|---|---|---|
-| otel-collector-contrib | приём OTLP, удаление идентификаторов, отдача метрик в формате Prometheus, пересылка логов | 4317, 8889, 13133, 8888 (свои метрики) | 1 |
+| otel-collector-contrib | приём OTLP, удаление идентификаторов, отдача метрик в формате Prometheus, пересылка логов | 4317, 13133; внутри сети compose: 8889 (экспорт), 8888 (свои метрики), 4319 (запасной delta-вход) | 1 |
 | Prometheus | хранение метрик 30 дней, PromQL | 9090 | 1 |
 | Grafana | история и дашборды, provisioning как код | 3000 | 1 (профиль `history`) |
 | overlay-api | считает показатели, отдаёт снимок и поток | 8787 | 2 |
@@ -58,7 +58,8 @@ logs:    otlp → memory_limiter → transform/drop_ids → batch → otlphttp/l
 ```
 
 - `memory_limiter` стоит первым: он должен отказать во входе раньше, чем данные попадут в остальные процессоры.
-- `deltatocumulative` отсутствует: Claude Code шлёт cumulative ([ADR-0001](adr/0001-temporality.md)).
+- В основном конвейере нет `delta_to_cumulative`: Claude Code шлёт cumulative ([ADR-0001](adr/0001-temporality.md)). Процессор стоит только в запасном конвейере `metrics/delta` на внутреннем порту 4319.
+- Внутренняя сеть compose имеет явно заданную подсеть (`CC_OVERLAY_SUBNET`): при активном VPN Docker не может выбрать её сам.
 - У экспортёра `prometheus` включён `send_timestamps` и увеличен `metric_expiration` ([ADR-0002](adr/0002-metrics-path.md)).
 
 ## Бюджет задержки
@@ -87,7 +88,9 @@ logs:    otlp → memory_limiter → transform/drop_ids → batch → otlphttp/l
 | Grafana | 160 МБ | профиль `history` |
 | Loki | 160 МБ | профиль `history` |
 
-Постоянно работает ядро на 320 МБ. С профилем `history` выходит 640 МБ по лимитам; фактическое потребление ожидается ниже, измеряется в фазах 1 и 4.
+Постоянно работает ядро на 320 МБ. С профилем `history` выходит 640 МБ по лимитам.
+
+Измерено в фазе 1 в простое: коллектор 40 МБ, Prometheus 32 МБ. Лимиты в `compose.yaml` сейчас: коллектор 160 МБ, Prometheus 160 МБ, Grafana 200 МБ; ужимаются после измерений под нагрузкой.
 
 ## Состояния оверлея
 
@@ -110,7 +113,7 @@ logs:    otlp → memory_limiter → transform/drop_ids → batch → otlphttp/l
 
 Оверлей обращается к `http://127.0.0.1:8787`, а не к `localhost`: имя `localhost` в Windows может разрешиться в `::1`, который WSL не пробрасывает.
 
-Docker Engine внутри WSL публикует порты на `127.0.0.1` самой WSL. В режиме NAT Windows пробрасывает свой localhost в WSL, но это проверяется в фазе 1 командой `curl.exe http://127.0.0.1:9090/-/ready` из PowerShell. Если проброс не работает, запасной вариант — `networkingMode=mirrored` в `.wslconfig`; это глобальная настройка, применяется только с согласия владельца.
+Docker Engine внутри WSL публикует порты на `127.0.0.1` самой WSL. В режиме NAT Windows пробрасывает свой localhost в WSL; в фазе 1 это подтверждено командой `curl.exe http://127.0.0.1:9090/-/ready` со стороны Windows. Если проброс перестанет работать, запасной вариант — `networkingMode=mirrored` в `.wslconfig`; это глобальная настройка, применяется только с согласия владельца.
 
 ## Приватность
 

@@ -1,0 +1,108 @@
+# Тесты семантики итогов (ADR-0007, docs/queries.md) на синтетических сериях.
+# Запуск: make test (promtool test rules).
+#
+# Шаблон «итог за окно W»:
+#   sum(last_over_time(M[W]) - (last_over_time(M[7d] offset W) or last_over_time(M[W]) * 0))
+# Во всех тестах точки идут раз в минуту, момент вычисления 40m, окно W = 20m, то есть (20m, 40m].
+rule_files: []
+evaluation_interval: 1m
+
+tests:
+  - name: итог за окно
+    interval: 1m
+    input_series:
+      # a: родилась внутри окна с ненулевым первым значением. Вклад: всё значение, 700.
+      - series: 'T{session_id="a", type="input"}'
+        values: "_x29 500 600 700"
+      # b: существовала до окна, молчала с 6-й по 29-ю минуту, продолжила в окне.
+      # До окна 600, в конце 700. Вклад: 100.
+      - series: 'T{session_id="b", type="input"}'
+        values: "100+100x5 _x23 650 700"
+      # c: закончилась до начала окна. Вклад: 0.
+      - series: 'T{session_id="c", type="input"}'
+        values: "50+50x5"
+      # d: идёт непрерывно через границу окна (случай «сессия через полночь»).
+      # На 20-й минуте 200, на 40-й 400. Вклад: 200.
+      - series: 'T{session_id="d", type="output"}'
+        values: "0+10x40"
+    promql_expr_test:
+      - expr: >
+          sum by (session_id) (
+            last_over_time(T[20m])
+            - (last_over_time(T[7d] offset 20m) or last_over_time(T[20m]) * 0)
+          )
+        eval_time: 40m
+        exp_samples:
+          - labels: '{session_id="a"}'
+            value: 700
+          - labels: '{session_id="b"}'
+            value: 100
+          - labels: '{session_id="d"}'
+            value: 200
+
+      - expr: >
+          sum(
+            last_over_time(T[20m])
+            - (last_over_time(T[7d] offset 20m) or last_over_time(T[20m]) * 0)
+          )
+        eval_time: 40m
+        exp_samples:
+          - labels: "{}"
+            value: 1000
+
+      # Итог за сессию: текущее значение счётчика, в том числе для давно закончившейся серии.
+      - expr: sum by (session_id) (last_over_time(T[7d]))
+        eval_time: 40m
+        exp_samples:
+          - labels: '{session_id="a"}'
+            value: 700
+          - labels: '{session_id="b"}'
+            value: 700
+          - labels: '{session_id="c"}'
+            value: 300
+          - labels: '{session_id="d"}'
+            value: 400
+
+  # Зачем нужна глубина 7d: мгновенный селектор не видит точку старше 5 минут,
+  # серия b выглядит новой и вносит 700 вместо 100.
+  - name: наивный offset задваивает итог после паузы
+    interval: 1m
+    input_series:
+      - series: 'T{session_id="b", type="input"}'
+        values: "100+100x5 _x23 650 700"
+    promql_expr_test:
+      - expr: >
+          sum(last_over_time(T[20m]) - ((T offset 20m) or last_over_time(T[20m]) * 0))
+        eval_time: 40m
+        exp_samples:
+          - labels: "{}"
+            value: 700
+
+  # Почему не increase(): первое значение серии (500) не учитывается,
+  # остаток экстраполируется. Истинный прирост 700.
+  - name: increase теряет первое значение серии
+    interval: 1m
+    input_series:
+      - series: 'T{session_id="a", type="input"}'
+        values: "_x29 500 600 700"
+    promql_expr_test:
+      - expr: sum(increase(T[20m]))
+        eval_time: 40m
+        exp_samples:
+          - labels: "{}"
+            value: 300
+
+  - name: страж сбросов
+    interval: 1m
+    input_series:
+      # Счётчик упал с 300 до 50: шаблон «итог за окно» здесь неточен.
+      - series: 'T{session_id="r", type="input"}'
+        values: "_x29 100 200 300 50 100"
+      - series: 'T{session_id="ok", type="input"}'
+        values: "_x29 100 200 300 350 400"
+    promql_expr_test:
+      - expr: sum by (session_id) (resets(T[20m])) > 0
+        eval_time: 40m
+        exp_samples:
+          - labels: '{session_id="r"}'
+            value: 1

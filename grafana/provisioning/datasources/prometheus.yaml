@@ -1,0 +1,14 @@
+# Источник данных как код: Grafana создаёт его при старте, правка из интерфейса запрещена.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Минимальный шаг графиков: интервал экспорта Claude Code.
+      timeInterval: 5s

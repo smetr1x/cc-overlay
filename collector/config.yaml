@@ -1,0 +1,80 @@
+# Конфигурация OpenTelemetry Collector для cc-overlay.
+# Обоснования: docs/adr/0001 (temporality), 0002 (путь метрик), 0008 (приватность).
+
+receivers:
+  # Основной вход. Claude Code шлёт сюда cumulative-метрики.
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+  # Запасной вход для delta-метрик (ADR-0001). Порт наружу не публикуется;
+  # путь существует, чтобы e2e-тесты держали его рабочим.
+  otlp/delta:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4319
+
+processors:
+  # Всегда первый: отказывает во входе раньше, чем данные займут память дальше по конвейеру.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 110
+    spike_limit_mib: 25
+
+  # Идентификаторы пользователя лежат в атрибутах точек, а не в resource,
+  # поэтому удаляются в контексте datapoint. session.id остаётся: на нём построены показатели.
+  transform/drop_ids:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          - delete_key(datapoint.attributes, "user.email")
+          - delete_key(datapoint.attributes, "user.account_uuid")
+          - delete_key(datapoint.attributes, "user.account_id")
+          - delete_key(datapoint.attributes, "user.id")
+          - delete_key(datapoint.attributes, "organization.id")
+
+  # Только в запасном конвейере. Состояние хранится в памяти:
+  # рестарт коллектора или простой дольше max_stale обнуляют счётчик.
+  delta_to_cumulative:
+    max_stale: 1h
+
+  batch:
+    timeout: 200ms
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Время точки от источника, а не время scrape: на нём построен показатель свежести.
+    send_timestamps: true
+    # Сколько экспортёр продолжает отдавать серию без новых точек.
+    # Держим заметно меньше часа: Prometheus отвергает точки старше ~1 ч как out-of-bounds.
+    metric_expiration: 15m
+    # Явно, чтобы имена метрик не зависели от смены значения по умолчанию.
+    translation_strategy: UnderscoreEscapingWithSuffixes
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/drop_ids, batch]
+      exporters: [prometheus]
+    metrics/delta:
+      receivers: [otlp/delta]
+      processors: [memory_limiter, transform/drop_ids, delta_to_cumulative, batch]
+      exporters: [prometheus]

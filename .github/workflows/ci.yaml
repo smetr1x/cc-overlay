@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Конфиги и линтеры
+        run: make check
+
+      - name: Семантика PromQL и unit-тесты
+        run: make test
+
+      - name: Сквозной тест на синтетике
+        run: make test-e2e
+
+      - name: Сборка образов
+        run: make build
