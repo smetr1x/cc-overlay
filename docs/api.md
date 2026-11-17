@@ -45,7 +45,15 @@
     "age_seconds": 19.2,
     "stale": false
   },
-  "levels": {"cost_usd_per_hour": "ok", "five_hour_percent": "ok", "seven_day_percent": "ok", "context_percent": "ok"}
+  "events": {
+    "available": true,
+    "last_request": {"at": "2026-11-16T20:04:53Z", "age_seconds": 7, "model": "claude-sonnet-5-5",
+                     "duration_ms": 6604, "ttft_ms": 5042, "input_tokens": 4, "output_tokens": 229,
+                     "cache_read_tokens": 29813, "cache_creation_tokens": 9383, "cost_usd": 0.0428},
+    "errors": {"window_seconds": 900, "count": 0, "last": null},
+    "latency": {"window_seconds": 3600, "requests": 12, "p50_ms": 4100, "p95_ms": 9800}
+  },
+  "levels": {"cost_usd_per_hour": "ok", "five_hour_percent": "ok", "seven_day_percent": "ok", "context_percent": "ok", "api_errors_15m": "ok"}
 }
 ```
 
@@ -87,11 +95,17 @@
 | `limits.source` | `usage` — из ответа на `/usage` (хук, работает везде); `statusline` — из status line (только терминал). Действует тот отчёт, что пришёл последним |
 | `limits.scoped` | недельные лимиты отдельных моделей; есть только в отчёте `/usage` |
 | `limits.stale`, `context.stale` | `true`, если источник не обновлялся дольше `statusline_max_age`: значение могло измениться |
+| `events` | показатели из событий в Loki; `null`, если Loki не настроен (`loki_url: ""`) |
+| `events.available` | `false` — Loki недоступен, остальные поля блока `null`. Общий `status` от этого не меняется |
+| `events.last_request` | последний запрос основного диалога текущей сессии, а без сессии — любой за сутки |
+| `events.last_request.ttft_ms` | время до первого токена; атрибута нет в документации, приходит с Claude Code 2.1.319 |
+| `events.errors` | события `api_error` за 15 минут по всем сессиям. `count: 0` — известный ноль; `last` без текста ошибки |
+| `events.latency` | перцентили длительности запросов основного диалога за час; при `requests: 0` перцентили `null` |
 | `levels` | уровень `ok`, `warn` или `crit` по порогам из `overlay-api/config.yaml`. Ключа нет, если нет значения |
 
 ### Частота обновления
 
-Блок `session`, `rate`, `status` и `limits` пересчитываются каждую секунду (`poll_interval`). Итоги `today` и `window_5h` — раз в 10 секунд (`totals_interval`): их запросы читают часы истории.
+Блок `events` обновляется раз в 2 секунды (`events_interval`), возраст в нём пересчитывается каждую секунду. Блок `session`, `rate`, `status` и `limits` пересчитываются каждую секунду (`poll_interval`). Итоги `today` и `window_5h` — раз в 10 секунд (`totals_interval`): их запросы читают часы истории.
 
 ## Поток
 
@@ -157,6 +171,7 @@ data: {"status":"ok", ...}
 |---|---|
 | `cc_overlay_snapshot_build_duration_seconds` | время сборки снимка |
 | `cc_overlay_prometheus_query_errors_total` | неудачные запросы к Prometheus |
+| `cc_overlay_loki_query_errors_total` | неудачные запросы к Loki |
 | `cc_overlay_snapshot_status{status}` | 1 для текущего статуса |
 | `cc_overlay_sse_clients` | подключённые клиенты потока |
 | `cc_overlay_rate_limit_used_percent{window}` | процент лимита из status line; так он попадает в историю |

@@ -30,6 +30,10 @@ type Builder struct {
 	now        func() time.Time
 	onQueryErr func()
 
+	loki        EventsQuerier // nil — Loki не настроен
+	onLokiErr   func()
+	eventsCache *eventsCache
+
 	tracker *tracker
 	// Момент начала сессии не меняется, а запрос за ним дорогой.
 	startedAt map[string]time.Time
@@ -40,6 +44,15 @@ type Builder struct {
 
 type windowTotals struct {
 	today, fiveHour *Window
+}
+
+// WithEvents подключает Loki. onErr вызывается на каждый неудачный запрос к нему (для метрики).
+func (b *Builder) WithEvents(q EventsQuerier, onErr func()) *Builder {
+	if onErr == nil {
+		onErr = func() {}
+	}
+	b.loki, b.onLokiErr = q, onErr
+	return b
 }
 
 // NewBuilder создаёт сборщик. onQueryErr вызывается на каждый неудачный запрос (для метрики).
@@ -92,9 +105,19 @@ func (b *Builder) byLabel(ctx context.Context, expr, label string) map[string]fl
 func (b *Builder) Build(ctx context.Context) (snap Snapshot) {
 	now := b.now()
 	snap = Snapshot{GeneratedAt: now, Levels: map[string]string{}}
-	// Лимиты приходят не из Prometheus и показываются при любом его состоянии.
+	// Лимиты и события приходят не из Prometheus и показываются при любом его состоянии.
 	// Результат именованный, чтобы отложенный вызов дополнял именно возвращаемый снимок.
-	defer func() { b.addLimits(&snap, now) }()
+	defer func() {
+		b.addLimits(&snap, now)
+		sessionID := ""
+		if snap.Session != nil {
+			sessionID = snap.Session.ID
+		}
+		snap.Events = b.events(ctx, sessionID, now)
+		if e := snap.Events; e != nil && e.Errors != nil {
+			b.level(&snap, "api_errors_15m", e.Errors.Count)
+		}
+	}()
 
 	// Первый запрос заодно проверяет доступность Prometheus.
 	upSamples, err := b.query(ctx, b.qb.PipelineUp())

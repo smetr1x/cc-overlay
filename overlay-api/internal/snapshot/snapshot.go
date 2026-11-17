@@ -33,6 +33,8 @@ type Snapshot struct {
 	Today          *Window  `json:"today"`
 	Window5h       *Window  `json:"window_5h"`
 	Limits         *Limits  `json:"limits"`
+	// Показатели из событий (Loki). null, если Loki не настроен; available=false, если недоступен.
+	Events *Events `json:"events"`
 	// Уровни ok / warn / crit по порогам из конфига; ключи — имена порогов.
 	Levels map[string]string `json:"levels"`
 }

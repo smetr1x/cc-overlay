@@ -53,6 +53,15 @@ describe("duration", () => {
   ])("%d → %s", (input, want) => expect(fmt.duration(input)).toBe(want));
 });
 
+describe("millis", () => {
+  it.each([
+    [850, "850мс"],
+    [6604, "6.6с"],
+    [95_400, "95с"],
+  ])("%d → %s", (input, want) => expect(fmt.millis(input)).toBe(want));
+  it("null — прочерк", () => expect(fmt.millis(null)).toBe(fmt.NO_VALUE));
+});
+
 describe("percent и model", () => {
   it("помечает оценку тильдой", () => {
     expect(fmt.percent(25.6)).toBe("26%");

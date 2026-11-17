@@ -100,7 +100,8 @@ func TestShippedConfigMatchesDefaults(t *testing.T) {
 	if shipped.PollInterval != def.PollInterval || shipped.TotalsInterval != def.TotalsInterval ||
 		shipped.ExportInterval != def.ExportInterval || shipped.BaselineLookback != def.BaselineLookback ||
 		shipped.ContextWindowDefault != def.ContextWindowDefault ||
-		shipped.JobRegex != def.JobRegex || shipped.PipelineJob != def.PipelineJob ||
+		shipped.JobRegex != def.JobRegex ||
+		shipped.LokiURL != def.LokiURL || shipped.EventsInterval != def.EventsInterval || shipped.PipelineJob != def.PipelineJob ||
 		strings.Join(shipped.CORSOrigins, ",") != strings.Join(def.CORSOrigins, ",") {
 		t.Errorf("config.yaml расходится со значениями по умолчанию:\n файл: %+v\n код:  %+v", shipped, def)
 	}

@@ -9,11 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -594,5 +596,194 @@ func TestContextFromEvents(t *testing.T) {
 				t.Errorf("идентификатор %s в метрике контекста", name)
 			}
 		}
+	}
+}
+
+// --- Loki ---
+
+// lokiQuery выполняет метрический запрос LogQL и возвращает единственное значение.
+func lokiQuery(t *testing.T, expr string) (float64, bool) {
+	t.Helper()
+	resp, err := http.Get(env(t, "LOKI_URL") + "/loki/api/v1/query?query=" + url.QueryEscape(expr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data struct {
+			Result []struct {
+				Value [2]any `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("ответ Loki на %s: HTTP %d, %v", expr, resp.StatusCode, err)
+	}
+	if len(body.Data.Result) != 1 {
+		return 0, false
+	}
+	var v float64
+	fmt.Sscanf(body.Data.Result[0].Value[1].(string), "%g", &v)
+	return v, true
+}
+
+// lokiLabels возвращает метки и structured metadata последних записей сессии.
+func lokiLabels(t *testing.T, sessionID string) []map[string]string {
+	t.Helper()
+	q := fmt.Sprintf(`{service_name=%q} | session_id=%q`, snapshotService, sessionID)
+	start := time.Now().Add(-time.Hour).UnixNano()
+	resp, err := http.Get(fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&limit=100",
+		env(t, "LOKI_URL"), url.QueryEscape(q), start))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data struct {
+			Result []struct {
+				Stream map[string]string `json:"stream"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]string
+	for _, r := range body.Data.Result {
+		out = append(out, r.Stream)
+	}
+	return out
+}
+
+// События: synth → коллектор → Loki → overlay-api (фаза 4, ADR-0005).
+func TestEvents(t *testing.T) {
+	endpoint := env(t, "SYNTH_OTLP_ENDPOINT")
+	waitTCP(t, endpoint)
+	ctx := context.Background()
+
+	id := fmt.Sprintf("events-%d", time.Now().UnixNano())
+	cfg := synth.Config{Endpoint: endpoint, Temporality: synth.Cumulative, Interval: exportInterval, ServiceName: snapshotService}
+	s, err := synth.NewSession(ctx, id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(ctx)
+
+	s.APIRequestTimed(ctx, sonnet, "sdk", 10, 100, 1000, 0, 2000)
+	s.APIError(ctx, sonnet, 529, 1)
+	s.APIRequestTimed(ctx, sonnet, "subagent", 10, 100, 1000, 0, 60000) // не основной диалог: в латентность не входит
+	s.APIRequestTimed(ctx, sonnet, "main", 20, 300, 2000, 500, 9000)
+	if err := s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := snapshotEventually(t, "события в снимке", map[string]any{
+		"session.id":                       id,
+		"events.available":                 true,
+		"events.last_request.model":        sonnet,
+		"events.last_request.duration_ms":  9000.0,
+		"events.last_request.ttft_ms":      4500.0,
+		"events.last_request.input_tokens": 20.0,
+		"events.errors.count":              1.0,
+		"events.errors.last.status_code":   "529",
+		"events.errors.last.attempt":       1.0,
+		"levels.api_errors_15m":            "warn",
+	})
+	// Латентность считается по всем сессиям за час, а другие тесты тоже шлют запросы,
+	// поэтому проверяется только то, что не зависит от их количества.
+	if n, _ := dig(snap, "events", "latency", "requests").(float64); n < 2 {
+		t.Errorf("events.latency.requests = %v, ожидалось не меньше 2", n)
+	}
+	p50, ok50 := dig(snap, "events", "latency", "p50_ms").(float64)
+	p95, ok95 := dig(snap, "events", "latency", "p95_ms").(float64)
+	if !ok50 || !ok95 || p95 < p50 || p95 > 9000 {
+		t.Errorf("перцентили: p50=%v p95=%v; запрос субагента (60 с) не должен входить", p50, p95)
+	}
+
+	// Приватность (ADR-0008): ни идентификаторов, ни содержимого в Loki.
+	entries := lokiLabels(t, id)
+	if len(entries) == 0 {
+		t.Fatal("записей сессии в Loki нет")
+	}
+	names := map[string]bool{}
+	for _, labels := range entries {
+		for name := range labels {
+			names[name] = true
+			if strings.HasPrefix(name, "user_") || name == "organization_id" || name == "tool_parameters" {
+				t.Errorf("в Loki попал атрибут %s", name)
+			}
+		}
+	}
+	keys := make([]string, 0, len(names))
+	for n := range names {
+		keys = append(keys, n)
+	}
+	slices.Sort(keys)
+	t.Logf("метки и structured metadata в Loki: %s", strings.Join(keys, ", "))
+	for _, want := range []string{"service_name", "event_name", "session_id", "query_source", "duration_ms"} {
+		if !names[want] {
+			t.Errorf("в Loki нет поля %s, на котором построены запросы", want)
+		}
+	}
+}
+
+// Запросы всех панелей дашбордов выполняются без ошибок на настоящих Prometheus и Loki.
+// Макросы Grafana заменяются характерными значениями.
+func TestDashboardQueries(t *testing.T) {
+	files, err := filepath.Glob("../../../grafana/provisioning/dashboards/json/*.json")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("дашборды не найдены: %v", err)
+	}
+	macros := strings.NewReplacer("$__range", "1h", "$__interval", "1h", "$__auto", "5m", "$__rate_interval", "5m")
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dash struct {
+			Panels []struct {
+				Title      string `json:"title"`
+				Datasource struct {
+					UID string `json:"uid"`
+				} `json:"datasource"`
+				Targets []struct {
+					Expr string `json:"expr"`
+				} `json:"targets"`
+			} `json:"panels"`
+		}
+		if err := json.Unmarshal(raw, &dash); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		checked := 0
+		for _, p := range dash.Panels {
+			for _, target := range p.Targets {
+				if target.Expr == "" {
+					continue
+				}
+				expr := macros.Replace(target.Expr)
+				var u string
+				switch p.Datasource.UID {
+				case "prometheus":
+					u = env(t, "PROM_URL") + "/api/v1/query?query=" + url.QueryEscape(expr)
+				case "loki":
+					// Запрос журнала (без агрегации) выполняется как query_range.
+					u = env(t, "LOKI_URL") + "/loki/api/v1/query_range?limit=1&query=" + url.QueryEscape(expr)
+				default:
+					t.Errorf("%s / %s: неизвестный источник %q", filepath.Base(file), p.Title, p.Datasource.UID)
+					continue
+				}
+				resp, err := http.Get(u)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"status":"success"`)) {
+					t.Errorf("%s / %s: HTTP %d\n  запрос: %s\n  ответ: %.300s", filepath.Base(file), p.Title, resp.StatusCode, expr, body)
+				}
+				checked++
+			}
+		}
+		t.Logf("%s: проверено запросов: %d", filepath.Base(file), checked)
 	}
 }

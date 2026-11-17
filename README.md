@@ -2,18 +2,18 @@
 
 Живой мониторинг расхода Claude Code: оверлей поверх окон Windows и история в Grafana. Всё работает локально, наружу ничего не уходит.
 
-Состояние: готовы пайплайн метрик, overlay-api и окно оверлея (фазы 1–3). Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
+Состояние: готовы пайплайн метрик, overlay-api, окно оверлея, события в Loki и дашборд Grafana (фазы 1–4). Если что-то не показывается — [docs/runbook.md](docs/runbook.md). Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
 
 ## Быстрый старт
 
 Нужны Docker Engine с Compose и `make`. Go, Node и прочее ставить не нужно: тесты и линтеры идут в контейнерах.
 
 ```bash
-make up            # коллектор, Prometheus и overlay-api; при первом запуске создаёт .env
+make up            # коллектор, Prometheus, Loki и overlay-api; при первом запуске создаёт .env
 # добавь настройки в ~/.claude/settings.json (ниже) и перезапусти Claude Code
 make verify-real   # проверить, что метрики настоящей сессии дошли
 make snapshot      # то, что увидит оверлей
-make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (admin, пароль из .env)
+make up-history    # по желанию: Grafana с дашбордом, http://127.0.0.1:3000/d/cc-overlay (admin, пароль из .env)
 ```
 
 ### Настройки Claude Code: `~/.claude/settings.json`
@@ -125,17 +125,12 @@ make overlay-run
 | 9090 | Prometheus |
 | 8787 | overlay-api: снимок, поток, приём status line ([docs/api.md](docs/api.md)) |
 | 1420 | интерфейс оверлея в режиме разработки (`make overlay-dev`) |
+| 3100 | Loki |
 | 3000 | Grafana (профиль `history`) |
 
 ## Данных нет — что проверить
 
-1. `make ps` — контейнеры запущены и в состоянии healthy. `make snapshot` — поле `status` подскажет, где искать: `backend_down`, `stale`, `no_data`.
-2. `curl -s http://127.0.0.1:13133/` — коллектор отвечает `Server available`.
-3. В Prometheus на странице Status → Targets цель `collector-export` в состоянии UP.
-4. Claude Code перезапущен после правки настроек и получил хотя бы один ответ: метрики появляются только после первого запроса к API.
-5. `claude --debug-file /tmp/cc-debug.log`, затем `grep '3P telemetry' /tmp/cc-debug.log` — ошибки экспорта.
-6. `make logs` — ошибки коллектора.
-7. `make test-e2e` проходит, значит конвейер исправен и дело в настройках Claude Code.
+Пошагово по каждому полю снимка — в [docs/runbook.md](docs/runbook.md). Первая команда всегда `make snapshot`: поле `status` подскажет, где искать.
 
 Ошибка `all predefined address pools have been fully subnetted` при запуске означает, что Docker не смог выбрать подсеть сам; обычно причина — VPN. В `compose.yaml` подсеть задана явно, при конфликте поменяй `CC_OVERLAY_SUBNET` в `.env`.
 
@@ -145,7 +140,8 @@ make overlay-run
 collector/config.yaml        конвейеры коллектора
 prometheus/prometheus.yml    цели и интервалы сбора
 prometheus/tests/            тесты семантики итогов (promtool)
-grafana/provisioning/        источники данных как код
+grafana/provisioning/        источники данных и дашборд как код
+loki/config.yaml             хранилище событий
 overlay-api/                 сервис показателей: снимок, SSE, приём status line
 overlay/                     окно оверлея: интерфейс (TypeScript, Vite) и оболочка Tauri (src-tauri)
 statusline/                  скрипт status line для Claude Code

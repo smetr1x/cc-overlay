@@ -10,6 +10,7 @@ type Metrics struct {
 
 	BuildDuration prometheus.Histogram
 	QueryErrors   prometheus.Counter
+	LokiErrors    prometheus.Counter
 	Status        *prometheus.GaugeVec
 	SSEClients    prometheus.Gauge
 	RateLimit     *prometheus.GaugeVec
@@ -28,6 +29,10 @@ func New() *Metrics {
 		QueryErrors: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "cc_overlay_prometheus_query_errors_total",
 			Help: "Неудачные запросы к Prometheus.",
+		}),
+		LokiErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "cc_overlay_loki_query_errors_total",
+			Help: "Неудачные запросы к Loki.",
 		}),
 		Status: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "cc_overlay_snapshot_status",
@@ -50,7 +55,7 @@ func New() *Metrics {
 			Help: "Принятые и отклонённые отчёты по источнику: statusline или usage.",
 		}, []string{"source", "result"}),
 	}
-	m.Registry.MustRegister(m.BuildDuration, m.QueryErrors, m.Status, m.SSEClients, m.RateLimit, m.Reports)
+	m.Registry.MustRegister(m.BuildDuration, m.QueryErrors, m.LokiErrors, m.Status, m.SSEClients, m.RateLimit, m.Reports)
 	return m
 }
 

@@ -190,7 +190,13 @@ func (s *Session) AddActiveTime(ctx context.Context, activityType string, second
 
 // APIRequest имитирует один запрос к API: событие claude_code.api_request
 // с токенами по типам и те же токены в счётчике claude_code.token.usage.
+// Длительность — 1 секунда; другую задаёт APIRequestTimed.
 func (s *Session) APIRequest(ctx context.Context, model, querySource string, input, output, cacheRead, cacheCreation int64) {
+	s.APIRequestTimed(ctx, model, querySource, input, output, cacheRead, cacheCreation, 1000)
+}
+
+// APIRequestTimed — то же с заданной длительностью запроса в миллисекундах.
+func (s *Session) APIRequestTimed(ctx context.Context, model, querySource string, input, output, cacheRead, cacheCreation, durationMs int64) {
 	for typ, n := range map[string]int64{"input": input, "output": output, "cacheRead": cacheRead, "cacheCreation": cacheCreation} {
 		if n > 0 {
 			s.AddTokens(ctx, typ, model, querySource, n)
@@ -214,6 +220,34 @@ func (s *Session) APIRequest(ctx context.Context, model, querySource string, inp
 		attribute.Int64("output_tokens", output),
 		attribute.String("cache_read_tokens", fmt.Sprint(cacheRead)),
 		attribute.Int64("cache_creation_tokens", cacheCreation),
+		attribute.Int64("duration_ms", durationMs),
+		attribute.Int64("ttft_ms", durationMs/2),
+		attribute.Float64("cost_usd", float64(input)*3e-6+float64(output)*15e-6),
+		// Содержимое, которое Claude Code передаёт только при включённых OTEL_LOG_*:
+		// коллектор обязан его вырезать.
+		attribute.String("tool_parameters", `{"command":"cat secrets.txt"}`),
+	)
+	s.logger.Emit(ctx, rec)
+}
+
+// APIError имитирует событие claude_code.api_error.
+func (s *Session) APIError(ctx context.Context, model string, statusCode, attempt int64) {
+	if s.logger == nil {
+		return
+	}
+	var rec otellog.Record
+	rec.SetTimestamp(time.Now())
+	rec.SetBody(attribute.StringValue("claude_code.api_error"))
+	rec.AddAttributes(
+		attribute.String("event.name", "api_error"),
+		attribute.String("session.id", s.ID),
+		attribute.String("user.email", "synth@example.com"),
+		attribute.String("model", model),
+		attribute.String("query_source", "sdk"),
+		attribute.String("error", "Overloaded"),
+		attribute.String("status_code", fmt.Sprint(statusCode)),
+		attribute.Int64("attempt", attempt),
+		attribute.Int64("duration_ms", 300),
 	)
 	s.logger.Emit(ctx, rec)
 }

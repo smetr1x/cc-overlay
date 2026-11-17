@@ -1,0 +1,13 @@
+# Дашборды как код: Grafana читает JSON из каталога при старте и раз в 30 секунд.
+# Правка в интерфейсе запрещена — меняется файл в репозитории.
+apiVersion: 1
+
+providers:
+  - name: cc-overlay
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
+      foldersFromFilesStructure: false

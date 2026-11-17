@@ -18,6 +18,7 @@ import (
 	_ "time/tzdata" // в образе нет базы часовых поясов, она встраивается в бинарник
 
 	"cc-overlay/overlay-api/internal/config"
+	"cc-overlay/overlay-api/internal/loki"
 	"cc-overlay/overlay-api/internal/metrics"
 	"cc-overlay/overlay-api/internal/prom"
 	"cc-overlay/overlay-api/internal/server"
@@ -70,6 +71,9 @@ func run(cfg config.Config, log *slog.Logger) error {
 	store := statusline.NewStore()
 	hub := server.NewHub()
 	builder := snapshot.NewBuilder(cfg, prom.New(cfg.PrometheusURL), store, time.Now, m.QueryErrors.Inc)
+	if cfg.LokiURL != "" {
+		builder.WithEvents(loki.New(cfg.LokiURL), m.LokiErrors.Inc)
+	}
 
 	var lastStatus snapshot.Status
 	publish := func() {
@@ -138,7 +142,7 @@ func run(cfg config.Config, log *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
-	log.Info("overlay-api запущен", "listen", cfg.Listen, "prometheus", cfg.PrometheusURL,
+	log.Info("overlay-api запущен", "listen", cfg.Listen, "prometheus", cfg.PrometheusURL, "loki", cfg.LokiURL,
 		"poll_interval", cfg.PollInterval.String(), "timezone", cfg.Location.String())
 
 	select {

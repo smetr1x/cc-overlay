@@ -1,0 +1,868 @@
+{
+  "uid": "cc-overlay",
+  "title": "Claude Code: расход",
+  "description": "Расход токенов и стоимости Claude Code, лимиты подписки, события API. Дашборд из репозитория cc-overlay.",
+  "tags": [
+    "claude-code",
+    "cc-overlay"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 41,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Токены за период",
+      "description": "input + output + cacheCreation за выбранный период. Чтение кэша — отдельно: по объёму оно на порядок больше.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type!=\"cacheRead\"}[$__range]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type!=\"cacheRead\"}[7d] offset $__range) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type!=\"cacheRead\"}[$__range]) * 0))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "нет данных",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Чтение кэша за период",
+      "description": "Токены, прочитанные из кэша промптов.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__range]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[7d] offset $__range) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__range]) * 0))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "нет данных",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "≈$ за период",
+      "description": "Оценка по ценам API, а не списания по подписке Pro.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__range]) - (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[7d] offset $__range) or last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__range]) * 0))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "noValue": "нет данных",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Попадание в кэш",
+      "description": "cacheRead / (input + cacheRead + cacheCreation) за период.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__range]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[7d] offset $__range) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__range]) * 0)) / sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[$__range]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[7d] offset $__range) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[$__range]) * 0))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "нет данных",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Лимит 5 часов",
+      "description": "Процент пятичасового лимита подписки по данным /usage или status line (ADR-0009, ADR-0010).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "last_over_time(cc_overlay_rate_limit_used_percent{window=\"five_hour\"}[1h])",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "нет данных",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Лимит 7 дней",
+      "description": "Процент недельного лимита подписки.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "last_over_time(cc_overlay_rate_limit_used_percent{window=\"seven_day\"}[1h])",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "нет данных",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "≈$ по дням и моделям",
+      "description": "Каждый столбец — итог за сутки (шаблон «итог за окно», ADR-0007).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (model) (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__interval]) - (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[7d] offset $__interval) or last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__interval]) * 0))",
+          "legendFormat": "{{model}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1d",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Токены по дням и типам",
+      "description": "Каждый столбец — итог за сутки.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (type) (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\"}[$__interval]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\"}[7d] offset $__interval) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\"}[$__interval]) * 0))",
+          "legendFormat": "{{type}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "normal"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1d",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Попадание в кэш",
+      "description": "Доля входных токенов, прочитанных из кэша, по интервалам графика.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__interval]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[7d] offset $__interval) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=\"cacheRead\"}[$__interval]) * 0)) / sum (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[$__interval]) - (last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[7d] offset $__interval) or last_over_time(claude_code_token_usage_tokens_total{job=~\"claude-code(-desktop)?\", type=~\"input|cacheRead|cacheCreation\"}[$__interval]) * 0))",
+          "legendFormat": "попадание",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1h",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Лимиты подписки",
+      "description": "История процента лимитов. Точки есть, пока работает overlay-api и приходят отчёты /usage.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "cc_overlay_rate_limit_used_percent",
+          "legendFormat": "{{window}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Латентность запросов",
+      "description": "Длительность запросов основного диалога по событиям api_request.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "expr": "quantile_over_time(0.5, {service_name=~\"claude-code(-desktop)?\"} | event_name=\"api_request\" | query_source=~\"main|sdk\" | unwrap duration_ms | __error__=\"\" [$__auto]) by ()",
+          "legendFormat": "p50",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        },
+        {
+          "expr": "quantile_over_time(0.95, {service_name=~\"claude-code(-desktop)?\"} | event_name=\"api_request\" | query_source=~\"main|sdk\" | unwrap duration_ms | __error__=\"\" [$__auto]) by ()",
+          "legendFormat": "p95",
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "min": 0,
+          "max": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки API",
+      "description": "Число событий api_error по коду ответа.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "expr": "sum by (status_code) (count_over_time({service_name=~\"claude-code(-desktop)?\"} | event_name=\"api_error\" [$__auto]))",
+          "legendFormat": "{{status_code}}",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "нет данных",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            },
+            "spanNulls": false,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+      },
+      "id": 12
+    },
+    {
+      "type": "table",
+      "title": "Топ сессий за период",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Сессии с наибольшей оценкой стоимости за выбранный период.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "expr": "topk(10, sum by (session_id) (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__range]) - (last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[7d] offset $__range) or last_over_time(claude_code_cost_usage_USD_total{job=~\"claude-code(-desktop)?\"}[$__range]) * 0)) > 0)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "session_id": "сессия",
+              "Value": "≈$"
+            }
+          }
+        }
+      ],
+      "options": {
+        "sortBy": [
+          {
+            "displayName": "≈$",
+            "desc": true
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 9
+      },
+      "id": 13
+    },
+    {
+      "type": "logs",
+      "title": "Последние ошибки API",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "События api_error. Поля — в раскрывающейся строке.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_name=~\"claude-code(-desktop)?\"} | event_name=\"api_error\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 9
+      },
+      "id": 14
+    },
+    {
+      "type": "stat",
+      "title": "Цели сбора",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "1 — Prometheus забирает метрики у сервиса.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 4
+      },
+      "id": 15
+    }
+  ]
+}

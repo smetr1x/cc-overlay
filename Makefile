@@ -47,11 +47,16 @@ logs: ## Последние логи сервисов и слежение за �
 ps: ## Состояние контейнеров
 	$(COMPOSE) --profile history ps
 
-wait: ## Дождаться готовности коллектора
+wait: ## Дождаться готовности коллектора и Loki
 	@for i in $$(seq 1 30); do \
-		curl -fsS -o /dev/null http://127.0.0.1:13133/ && echo "коллектор готов" && exit 0; \
+		curl -fs -o /dev/null http://127.0.0.1:13133/ && echo "коллектор готов" && break; \
+		[ $$i = 30 ] && { echo "коллектор не ответил на 127.0.0.1:13133 за 30 с" >&2; exit 1; }; \
 		sleep 1; \
-	done; echo "коллектор не ответил на 127.0.0.1:13133 за 30 с" >&2; exit 1
+	done
+	@for i in $$(seq 1 60); do \
+		curl -fs -o /dev/null http://127.0.0.1:3100/ready && echo "Loki готов" && exit 0; \
+		sleep 1; \
+	done; echo "Loki не ответил на 127.0.0.1:3100 за 60 с" >&2; exit 1
 
 snapshot: ## Показать текущий снимок overlay-api
 	@curl -fsS http://127.0.0.1:8787/api/v1/snapshot | python3 -m json.tool --no-ensure-ascii
@@ -61,6 +66,8 @@ check: .env ## Проверить конфиги: compose, коллектор, P
 	$(E2E) --profile test config -q
 	$(COMPOSE) run --rm --no-deps otel-collector validate --config=/etc/otelcol-contrib/config.yaml
 	$(COMPOSE) run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+	$(COMPOSE) run --rm --no-deps loki -config.file=/etc/loki/config.yaml -verify-config
+	python3 -c 'import json,glob; [json.load(open(f)) for f in glob.glob("grafana/provisioning/dashboards/json/*.json")]' && echo "дашборды: JSON корректен"
 	docker run --rm -v "$(CURDIR)":/data:ro $(YAMLLINT_IMAGE) -s .
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < tools/synth/Dockerfile
 	docker run --rm -i $(HADOLINT_IMAGE) hadolint - < overlay-api/Dockerfile

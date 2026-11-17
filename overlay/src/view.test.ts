@@ -39,7 +39,24 @@ function okSnapshot(): Snapshot {
       age_seconds: 27,
       stale: false,
     },
-    levels: { cost_usd_per_hour: "ok", five_hour_percent: "ok", seven_day_percent: "ok", context_percent: "ok" },
+    events: {
+      available: true,
+      last_request: {
+        at: "2026-11-16T22:57:04+03:00",
+        age_seconds: 7,
+        model: "claude-sonnet-5-5",
+        duration_ms: 6604,
+        ttft_ms: 5042,
+        input_tokens: 4,
+        output_tokens: 229,
+        cache_read_tokens: 29813,
+        cache_creation_tokens: 9383,
+        cost_usd: 0.0428113,
+      },
+      errors: { window_seconds: 900, count: 0, last: null },
+      latency: { window_seconds: 3600, requests: 12, p50_ms: 4100, p95_ms: 9800 },
+    },
+    levels: { cost_usd_per_hour: "ok", five_hour_percent: "ok", seven_day_percent: "ok", context_percent: "ok", api_errors_15m: "ok" },
   };
 }
 
@@ -126,7 +143,7 @@ describe("состояния", () => {
     Object.assign(snap, { status: "backend_down", session: null, rate: null, today: null, window_5h: null, active_sessions: null });
     const view = buildView(snap, live);
     expect(view.banner).toEqual({ text: "бэкенд недоступен: Prometheus", tone: "crit" });
-    expect(view.rows.map((r) => r.key)).toEqual(["limit5h", "limit7d"]);
+    expect(view.rows.map((r) => r.key)).toEqual(["request", "latency", "limit5h", "limit7d"]);
     expect(row(view, "limit5h").tone).toBe("ok");
   });
 
@@ -141,7 +158,7 @@ describe("состояния", () => {
 
   it("нет данных: баннер и ни одной строки с нулями", () => {
     const snap = okSnapshot();
-    Object.assign(snap, { status: "no_data", session: null, rate: null, today: null, window_5h: null, limits: null, levels: {} });
+    Object.assign(snap, { status: "no_data", session: null, rate: null, today: null, window_5h: null, limits: null, events: null, levels: {} });
     const view = buildView(snap, live);
     expect(view.banner).toEqual({ text: "нет данных", tone: "info" });
     expect(view.rows).toEqual([]);
@@ -153,7 +170,7 @@ describe("состояния", () => {
     const view = buildView(snap, live);
     expect(view.banner?.text).toBe("нет активной сессии");
     expect(view.title).toBe("");
-    expect(view.rows.map((r) => r.key)).toEqual(["rate", "today", "limit5h", "limit7d"]);
+    expect(view.rows.map((r) => r.key)).toEqual(["request", "latency", "rate", "today", "limit5h", "limit7d"]);
   });
 });
 
@@ -166,7 +183,8 @@ describe("неполные данные", () => {
     expect(view.rows.some((r) => r.key === "session")).toBe(false);
     expect(view.rows.some((r) => r.key === "context")).toBe(false);
     expect(row(view, "cost").text).toBe("— · —");
-    expect(JSON.stringify(view)).not.toMatch(/\b0(\.0+)?[%кkс]/);
+    // Ноль как самостоятельное число («0%», «0с»), а не цифра внутри «5.0с».
+    expect(JSON.stringify(view)).not.toMatch(/(^|[^\d.])0(\.0+)?[%кkс]/);
   });
 
   it("без настоящего лимита показывает расход за 5 часов как ориентир", () => {
@@ -190,6 +208,55 @@ describe("неполные данные", () => {
     const snap = okSnapshot();
     snap.today!.approximate = true;
     expect(row(buildView(snap, live), "today").text).toBe("~121k ток · ≈$0.52");
+  });
+});
+
+describe("события", () => {
+  it("последний запрос и задержка", () => {
+    const view = buildView(okSnapshot(), live);
+    expect(row(view, "request")).toMatchObject({ text: "6.6с · ttft 5.0с", hint: "7с назад · sonnet 5.5" });
+    expect(row(view, "latency")).toMatchObject({ text: "p50 4.1с · p95 9.8с", hint: "12 запр. за 1ч 00м" });
+  });
+
+  it("ноль ошибок строки не занимает", () => {
+    expect(buildView(okSnapshot(), live).rows.some((r) => r.key === "errors")).toBe(false);
+  });
+
+  it("ошибки API видны и окрашены", () => {
+    const snap = okSnapshot();
+    snap.events!.errors = {
+      window_seconds: 900,
+      count: 3,
+      last: { at: "", age_seconds: 125, status_code: "529", model: null, attempt: 1 },
+    };
+    snap.levels.api_errors_15m = "crit";
+    const r = row(buildView(snap, live), "errors");
+    expect(r).toMatchObject({ label: "ошибки API", text: "3 за 15м · 529", tone: "crit", hint: "последняя 2м назад" });
+    // В компактном режиме ошибки остаются: это то, что нельзя пропустить.
+    expect(buildView(snap, { connected: true, compact: true }).rows.map((x) => x.key)).toContain("errors");
+  });
+
+  it("Loki недоступен — явная погашенная строка", () => {
+    const snap = okSnapshot();
+    snap.events = { available: false, last_request: null, errors: null, latency: null };
+    const view = buildView(snap, live);
+    expect(row(view, "events")).toMatchObject({ text: "Loki недоступен", tone: "muted" });
+    expect(view.rows.some((r) => r.key === "request" || r.key === "latency")).toBe(false);
+    expect(view.banner).toBeNull();
+  });
+
+  it("Loki не настроен — строк событий нет", () => {
+    const snap = okSnapshot();
+    snap.events = null;
+    const keys = buildView(snap, live).rows.map((r) => r.key);
+    expect(keys).not.toContain("events");
+    expect(keys).not.toContain("request");
+  });
+
+  it("без запросов за час строки задержки нет", () => {
+    const snap = okSnapshot();
+    snap.events!.latency = { window_seconds: 3600, requests: 0, p50_ms: null, p95_ms: null };
+    expect(buildView(snap, live).rows.some((r) => r.key === "latency")).toBe(false);
   });
 });
 

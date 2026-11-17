@@ -7,6 +7,12 @@ listen: ":8787"
 # Prometheus со стеком cc-overlay (OVERLAY_PROMETHEUS_URL).
 prometheus_url: http://prometheus:9090
 
+# Loki с событиями Claude Code (OVERLAY_LOKI_URL). Пустая строка выключает блок событий в снимке.
+loki_url: http://loki:3100
+
+# Как часто опрашивать Loki: последний запрос, ошибки, латентность.
+events_interval: 2s
+
 # Регулярное выражение для метки job: какие источники считать Claude Code (OVERLAY_JOB_REGEX).
 # Метка приходит из service.name; синтетика (claude-code-synth) сюда не попадает.
 job_regex: "claude-code(-desktop)?"
@@ -58,3 +64,5 @@ thresholds:
   five_hour_percent: {warn: 70, crit: 90}
   seven_day_percent: {warn: 70, crit: 90}
   context_percent: {warn: 70, crit: 90}
+  # Число ошибок API за 15 минут.
+  api_errors_15m: {warn: 1, crit: 3}

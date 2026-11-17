@@ -34,6 +34,8 @@ func (t Threshold) Level(v float64) string {
 type Config struct {
 	Listen           string
 	PrometheusURL    string
+	LokiURL          string // пусто — блок событий выключен
+	EventsInterval   time.Duration
 	JobRegex         string
 	PipelineJob      string
 	PollInterval     time.Duration
@@ -66,6 +68,8 @@ func (c Config) StaleAfter() time.Duration { return 2 * c.ExportInterval }
 type file struct {
 	Listen           *string              `yaml:"listen"`
 	PrometheusURL    *string              `yaml:"prometheus_url"`
+	LokiURL          *string              `yaml:"loki_url"`
+	EventsInterval   *string              `yaml:"events_interval"`
 	JobRegex         *string              `yaml:"job_regex"`
 	PipelineJob      *string              `yaml:"pipeline_job"`
 	PollInterval     *string              `yaml:"poll_interval"`
@@ -85,7 +89,7 @@ type file struct {
 // getenv передаётся явно, чтобы тесты не зависели от окружения процесса.
 func Load(path string, getenv func(string) string) (Config, error) {
 	// Значения по умолчанию в виде строк: дальше они проходят тот же разбор, что и пользовательские.
-	listen, promURL := ":8787", "http://prometheus:9090"
+	listen, promURL, lokiURL, eventsInterval := ":8787", "http://prometheus:9090", "http://loki:3100", "2s"
 	jobRegex, pipelineJob := "claude-code(-desktop)?", "collector-export"
 	poll, totals, export := "1s", "10s", "5s"
 	queryTimeout, lookback, slMaxAge := "3s", "168h", "10m"
@@ -93,7 +97,8 @@ func Load(path string, getenv func(string) string) (Config, error) {
 	contextWindow := 200000.0
 	f := file{
 		ContextWindow: &contextWindow,
-		Listen:        &listen, PrometheusURL: &promURL, JobRegex: &jobRegex, PipelineJob: &pipelineJob,
+		LokiURL:       &lokiURL, EventsInterval: &eventsInterval,
+		Listen: &listen, PrometheusURL: &promURL, JobRegex: &jobRegex, PipelineJob: &pipelineJob,
 		PollInterval: &poll, TotalsInterval: &totals, ExportInterval: &export,
 		QueryTimeout: &queryTimeout, BaselineLookback: &lookback, StatuslineMaxAge: &slMaxAge,
 		Timezone:    &tz,
@@ -116,6 +121,7 @@ func Load(path string, getenv func(string) string) (Config, error) {
 	for env, dst := range map[string]*string{
 		"OVERLAY_LISTEN":             f.Listen,
 		"OVERLAY_PROMETHEUS_URL":     f.PrometheusURL,
+		"OVERLAY_LOKI_URL":           f.LokiURL,
 		"OVERLAY_JOB_REGEX":          f.JobRegex,
 		"OVERLAY_POLL_INTERVAL":      f.PollInterval,
 		"OVERLAY_TOTALS_INTERVAL":    f.TotalsInterval,
@@ -144,6 +150,7 @@ func Load(path string, getenv func(string) string) (Config, error) {
 		ContextWindows:       f.ContextWindows,
 		Listen:               *f.Listen,
 		PrometheusURL:        strings.TrimRight(*f.PrometheusURL, "/"),
+		LokiURL:              strings.TrimRight(*f.LokiURL, "/"),
 		JobRegex:             *f.JobRegex,
 		PipelineJob:          *f.PipelineJob,
 		Thresholds:           f.Thresholds,
@@ -153,6 +160,7 @@ func Load(path string, getenv func(string) string) (Config, error) {
 		dst *time.Duration
 	}{
 		"poll_interval":      {*f.PollInterval, &cfg.PollInterval},
+		"events_interval":    {*f.EventsInterval, &cfg.EventsInterval},
 		"totals_interval":    {*f.TotalsInterval, &cfg.TotalsInterval},
 		"export_interval":    {*f.ExportInterval, &cfg.ExportInterval},
 		"query_timeout":      {*f.QueryTimeout, &cfg.QueryTimeout},

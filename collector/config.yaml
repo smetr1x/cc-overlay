@@ -34,8 +34,7 @@ processors:
           - delete_key(datapoint.attributes, "user.account_id")
           - delete_key(datapoint.attributes, "user.id")
           - delete_key(datapoint.attributes, "organization.id")
-    # События нигде не хранятся: из них получается одна метрика (см. connectors).
-    # Удаление здесь — второй слой защиты и задел под хранение событий в фазе 4.
+    # События уходят в Loki и в коннектор метрики контекста; идентификаторы удаляются до обоих.
     log_statements:
       - context: log
         statements:
@@ -87,6 +86,15 @@ connectors:
             + Double(log.attributes["cache_creation_tokens"])
 
 exporters:
+  # Loki принимает OTLP нативно (ADR-0005). Если Loki остановлен, события копятся в очереди
+  # в памяти и отбрасываются при её переполнении; метрики и остальной конвейер от этого не зависят.
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+    sending_queue:
+      queue_size: 500
+    retry_on_failure:
+      max_elapsed_time: 2m
+
   prometheus:
     endpoint: 0.0.0.0:8889
     # Время точки от источника, а не время scrape: на нём построен показатель свежести.
@@ -120,7 +128,7 @@ service:
     logs:
       receivers: [otlp]
       processors: [memory_limiter, transform/drop_ids]
-      exporters: [signal_to_metrics]
+      exporters: [signal_to_metrics, otlp_http/loki]
     metrics/delta:
       receivers: [otlp/delta]
       processors: [memory_limiter, transform/drop_ids, delta_to_cumulative, batch]

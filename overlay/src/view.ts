@@ -36,7 +36,7 @@ export interface Options {
   compact: boolean;
 }
 
-const COMPACT_KEYS = new Set(["context", "rate", "limit5h"]);
+const COMPACT_KEYS = new Set(["context", "rate", "limit5h", "errors"]);
 
 function banner(snap: Snapshot | null, connected: boolean): Banner | null {
   if (!connected || !snap) return { text: "бэкенд недоступен", tone: "crit" };
@@ -67,6 +67,50 @@ function limitRow(key: string, label: string, limit: Limit, level: Level | undef
   if (stale) row.hint = "значение устарело";
   else if (limit.resets_in_seconds !== null) row.hint = `сброс через ${fmt.duration(limit.resets_in_seconds)}`;
   return row;
+}
+
+// Строки из событий (Loki). Блока нет — Loki не настроен, строк нет. Loki недоступен — одна погашенная строка:
+// отсутствие данных должно быть видно, а не выглядеть как «ошибок нет».
+function eventRows(snap: Snapshot, tone: (t: Tone) => Tone): Row[] {
+  const ev = snap.events;
+  if (!ev) return [];
+  if (!ev.available) return [{ key: "events", label: "события", text: "Loki недоступен", tone: "muted" }];
+
+  const rows: Row[] = [];
+  const req = ev.last_request;
+  if (req) {
+    rows.push({
+      key: "request",
+      label: "запрос",
+      text: `${fmt.millis(req.duration_ms)} · ttft ${fmt.millis(req.ttft_ms)}`,
+      tone: tone("ok"),
+      hint: `${fmt.duration(req.age_seconds)} назад · ${fmt.model(req.model)}`,
+    });
+  }
+  const lat = ev.latency;
+  if (lat && lat.requests > 0) {
+    rows.push({
+      key: "latency",
+      label: "задержка",
+      text: `p50 ${fmt.millis(lat.p50_ms)} · p95 ${fmt.millis(lat.p95_ms)}`,
+      tone: tone("ok"),
+      hint: `${lat.requests} запр. за ${fmt.duration(lat.window_seconds)}`,
+    });
+  }
+  // Строка ошибок появляется только когда они есть: ноль ошибок — нормальное состояние, место не занимает.
+  const errs = ev.errors;
+  if (errs && errs.count > 0) {
+    const last = errs.last;
+    const row: Row = {
+      key: "errors",
+      label: "ошибки API",
+      text: `${errs.count} за ${fmt.duration(errs.window_seconds)}` + (last?.status_code ? ` · ${last.status_code}` : ""),
+      tone: tone(snap.levels.api_errors_15m ?? "crit"),
+    };
+    if (last) row.hint = `последняя ${fmt.duration(last.age_seconds)} назад`;
+    rows.push(row);
+  }
+  return rows;
 }
 
 export function buildView(snap: Snapshot | null, opts: Options): View {
@@ -118,6 +162,8 @@ export function buildView(snap: Snapshot | null, opts: Options): View {
       rows.push(row);
     }
   }
+
+  rows.push(...eventRows(snap, tone));
 
   if (snap.rate) {
     rows.push({

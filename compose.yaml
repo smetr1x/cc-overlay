@@ -41,11 +41,28 @@ services:
       timeout: 3s
       retries: 12
 
+  # Хранилище событий (ADR-0005). В ядре, а не в профиле history: из него overlay-api берёт
+  # последний запрос, ошибки и латентность. overlay-api при этом работает и без Loki.
+  loki:
+    image: grafana/loki:3.7.10
+    command: ["-config.file=/etc/loki/config.yaml"]
+    environment:
+      GOMEMLIMIT: 150MiB
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    mem_limit: 192m
+    restart: unless-stopped
+    # В образе нет shell: готовность проверяют `make wait` и Prometheus (метрика up).
+
   overlay-api:
     build: ./overlay-api
     image: cc-overlay/overlay-api:dev
     environment:
       OVERLAY_PROMETHEUS_URL: http://prometheus:9090
+      OVERLAY_LOKI_URL: http://loki:3100
       # Часовой пояс для границы «сегодня».
       TZ: ${CC_OVERLAY_TZ:-UTC}
     volumes:
@@ -119,6 +136,7 @@ networks:
         - subnet: ${CC_OVERLAY_SUBNET:-10.210.0.0/24}
 
 volumes:
+  loki-data:
   overlay-node-modules:
   prometheus-data:
   grafana-data:

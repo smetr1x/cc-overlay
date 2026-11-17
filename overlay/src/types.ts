@@ -67,6 +67,35 @@ export interface Limits {
   stale: boolean;
 }
 
+export interface LastRequest {
+  at: string;
+  age_seconds: number;
+  model: string | null;
+  duration_ms: number | null;
+  ttft_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_creation_tokens: number | null;
+  cost_usd: number | null;
+}
+
+export interface ApiError {
+  at: string;
+  age_seconds: number;
+  status_code: string | null;
+  model: string | null;
+  attempt: number | null;
+}
+
+export interface Events {
+  /** false — Loki недоступен; остальные поля тогда null. */
+  available: boolean;
+  last_request: LastRequest | null;
+  errors: { window_seconds: number; count: number; last: ApiError | null } | null;
+  latency: { window_seconds: number; requests: number; p50_ms: number | null; p95_ms: number | null } | null;
+}
+
 export interface Snapshot {
   status: Status;
   generated_at: string;
@@ -77,5 +106,7 @@ export interface Snapshot {
   today: Window | null;
   window_5h: Window | null;
   limits: Limits | null;
-  levels: Partial<Record<"cost_usd_per_hour" | "five_hour_percent" | "seven_day_percent" | "context_percent", Level>>;
+  /** null — Loki не настроен в overlay-api. */
+  events: Events | null;
+  levels: Partial<Record<"cost_usd_per_hour" | "five_hour_percent" | "seven_day_percent" | "context_percent" | "api_errors_15m", Level>>;
 }

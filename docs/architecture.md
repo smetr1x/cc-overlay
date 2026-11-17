@@ -14,8 +14,8 @@ flowchart TB
             COL["otel-collector-contrib<br/>:4317 OTLP gRPC<br/>:8889 Prometheus exporter<br/>:13133 health_check"]
             PROM["Prometheus<br/>scrape 1s, retention 30d"]
             API["overlay-api (Go)<br/>snapshot, SSE, healthz, metrics"]
+            LOKI["Loki<br/>события, 30d"]
             subgraph history["profile: history"]
-                LOKI["Loki (фаза 4)"]
                 GRAF["Grafana"]
             end
         end
@@ -30,6 +30,7 @@ flowchart TB
     COL -- "scrape /metrics" --> PROM
     COL -- "OTLP HTTP: logs" --> LOKI
     PROM -- "PromQL" --> API
+    COL -. "события: метрика контекста" .-> PROM
     LOKI -- "LogQL" --> API
     SL -- "POST: лимиты, контекст (только терминал)" --> API
     HOOK -- "POST: лимиты из /usage" --> API
@@ -51,7 +52,7 @@ flowchart TB
 | status line script | передаёт в overlay-api лимиты и точное заполнение контекста; только терминальный Claude Code | — | 2 |
 | хук `/usage` | передаёт в overlay-api лимиты подписки при любом способе запуска, включая расширение VS Code ([ADR-0010](adr/0010-usage-hook.md)) | — | 2 |
 | overlay | окно поверх всех окон | — | 3 |
-| Loki | хранение событий | 3100 | 4 (профиль `history`) |
+| Loki | хранение событий; источник последнего запроса, ошибок и латентности | 3100 | 4 |
 
 Номера портов предварительные, окончательно задаются в `.env.example`.
 
@@ -59,10 +60,10 @@ flowchart TB
 
 ```
 metrics: otlp, signal_to_metrics → memory_limiter → transform/drop_ids → batch → prometheus
-logs:    otlp → memory_limiter → transform/drop_ids → signal_to_metrics
+logs:    otlp → memory_limiter → transform/drop_ids → signal_to_metrics, otlp_http/loki
 ```
 
-Конвейер логов заканчивается коннектором: из события `api_request` получается метрика заполнения контекста, сами события не хранятся ([ADR-0011](adr/0011-context-from-events.md)). Отправка событий в Loki добавится в фазе 4 вторым экспортёром.
+Конвейер логов разветвляется: события уходят в Loki, а коннектор `signal_to_metrics` берёт из `api_request` метрику заполнения контекста ([ADR-0011](adr/0011-context-from-events.md)).
 
 - `memory_limiter` стоит первым: он должен отказать во входе раньше, чем данные попадут в остальные процессоры.
 - В основном конвейере нет `delta_to_cumulative`: Claude Code шлёт cumulative ([ADR-0001](adr/0001-temporality.md)). Процессор стоит только в запасном конвейере `metrics/delta` на внутреннем порту 4319.
@@ -96,12 +97,12 @@ logs:    otlp → memory_limiter → transform/drop_ids → signal_to_metrics
 | Prometheus | 160 МБ | 53 МБ | да |
 | overlay-api | 32 МБ | 8 МБ | да |
 | Grafana | 350 МБ | 190–265 МБ | профиль `history` |
-| Loki | 160 МБ | — (фаза 4) | профиль `history` |
+| Loki | 192 МБ | 50–107 МБ | да (с фазы 4) |
 | окно оверлея (Windows, вне Docker) | — | 101 МБ вместе с WebView2 | запускается отдельно |
 
-Ядро занимает около 120 МБ при лимите 352 МБ и в бюджет ТЗ укладывается с запасом.
+Ядро вместе с Loki занимает около 215 МБ и в бюджет ТЗ укладывается.
 
-Grafana в бюджет не укладывается: версия 13 занимает 190 МБ сразу после старта без единого дашборда и растёт до 265 МБ. Вместе с ней стек выходит на 380 МБ, а с Loki превысит 500. Цель ТЗ выполнима только для ядра; поэтому Grafana и Loki вынесены в профиль `history` и запускаются, когда нужна история.
+Grafana в бюджет не укладывается: версия 13 занимает 190 МБ сразу после старта без единого дашборда и растёт до 265 МБ. Вместе с ней стек выходит на 490 МБ — на границе бюджета. Поэтому Grafana в профиле `history` и запускается, когда нужна история; Loki в ядре, потому что из него питается оверлей.
 
 ## Состояния оверлея
 

@@ -44,6 +44,14 @@ export function duration(seconds: Num): string {
   return `${Math.floor(h / 24)}д ${h % 24}ч`;
 }
 
+/** Миллисекунды: 850мс, 6.6с, 95с. */
+export function millis(v: Num): string {
+  if (missing(v)) return NO_VALUE;
+  if (v < 1000) return `${Math.round(v)}мс`;
+  if (v < 10_000) return `${(v / 1000).toFixed(1)}с`;
+  return `${Math.round(v / 1000)}с`;
+}
+
 /** Короткое имя модели: claude-sonnet-5-5 → sonnet 5.5. */
 export function model(id: string | null | undefined): string {
   if (!id) return NO_VALUE;

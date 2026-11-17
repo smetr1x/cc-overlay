@@ -8,6 +8,9 @@ services:
   prometheus:
     ports: !reset []
 
+  loki:
+    ports: !reset []
+
   overlay-api:
     ports: !reset []
     environment:
@@ -32,6 +35,7 @@ services:
       SYNTH_OTLP_DELTA_ENDPOINT: otel-collector:4319
       PROM_URL: http://prometheus:9090
       OVERLAY_API_URL: http://overlay-api:8787
+      LOKI_URL: http://loki:3100
 
 volumes:
   # Кэши Go внешние, чтобы `down -v` тестового проекта их не удалял.
