@@ -61,7 +61,7 @@ describe("обычная работа", () => {
 
   it("выводит показатели сессии", () => {
     expect(row(view, "session").text).toBe("in 1.3k · out 459");
-    expect(row(view, "session").hint).toBe("кэш: чтение 25.6k, запись 13.6k · попадание 63%");
+    expect(row(view, "session").hint).toBe("кэш 25.6k / 13.6k · 63%");
     expect(row(view, "cost").text).toBe("≈$0.06 · 15м");
     expect(row(view, "rate").text).toBe("3.1k ток/мин · ≈$0.69/ч");
     expect(row(view, "today").text).toBe("121k ток · ≈$0.52");

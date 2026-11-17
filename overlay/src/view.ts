@@ -90,7 +90,8 @@ export function buildView(snap: Snapshot | null, opts: Options): View {
         label: "сессия",
         text: `in ${fmt.tokens(t.input)} · out ${fmt.tokens(t.output)}`,
         tone: tone("ok"),
-        hint: `кэш: чтение ${fmt.tokens(t.cache_read)}, запись ${fmt.tokens(t.cache_creation)} · попадание ${fmt.percent(
+        // Коротко: подсказка не должна расширять окно. Чтение / запись кэша · доля попаданий.
+        hint: `кэш ${fmt.tokens(t.cache_read)} / ${fmt.tokens(t.cache_creation)} · ${fmt.percent(
           s.cache_hit_ratio === null ? null : s.cache_hit_ratio * 100,
         )}`,
       });

@@ -22,7 +22,7 @@ jobs:
       - name: Конфиги и линтеры
         run: make check
 
-      - name: Семантика PromQL и unit-тесты
+      - name: Семантика PromQL, unit-тесты Go и фронтенда
         run: make test
 
       - name: Сквозной тест на синтетике
@@ -30,3 +30,36 @@ jobs:
 
       - name: Сборка образов
         run: make build
+
+  # Окно оверлея собирается только средствами Windows.
+  overlay-windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: overlay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: overlay/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            overlay/src-tauri/target
+          key: cargo-${{ hashFiles('overlay/src-tauri/Cargo.lock') }}
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx tauri build --no-bundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cc-overlay-exe
+          path: overlay/src-tauri/target/release/cc-overlay.exe

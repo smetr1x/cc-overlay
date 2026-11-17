@@ -97,6 +97,7 @@ logs:    otlp → memory_limiter → transform/drop_ids → signal_to_metrics
 | overlay-api | 32 МБ | 8 МБ | да |
 | Grafana | 350 МБ | 190–265 МБ | профиль `history` |
 | Loki | 160 МБ | — (фаза 4) | профиль `history` |
+| окно оверлея (Windows, вне Docker) | — | 101 МБ вместе с WebView2 | запускается отдельно |
 
 Ядро занимает около 120 МБ при лимите 352 МБ и в бюджет ТЗ укладывается с запасом.
 

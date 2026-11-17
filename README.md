@@ -2,7 +2,7 @@
 
 Живой мониторинг расхода Claude Code: оверлей поверх окон Windows и история в Grafana. Всё работает локально, наружу ничего не уходит.
 
-Состояние: готовы пайплайн метрик, overlay-api и интерфейс оверлея, который пока открывается в браузере (`make overlay-dev`). Окно поверх всех окон появится после установки тулчейна Windows ([docs/windows-toolchain.md](docs/windows-toolchain.md)). Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
+Состояние: готовы пайплайн метрик, overlay-api и окно оверлея (фазы 1–3). Техническое задание — [SPEC.md](SPEC.md), архитектура — [docs/architecture.md](docs/architecture.md), решения — [docs/adr/](docs/adr/).
 
 ## Быстрый старт
 
@@ -73,6 +73,27 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 
 Диагностика скриптов: `cat /tmp/cc-overlay-usage.last /tmp/cc-overlay-statusline.last` — время последнего запуска и код ответа сервиса (`204` — принято).
 
+## Окно оверлея
+
+Сборка нужна один раз и после изменений в `overlay/`. Нужны Rust с тулчейном MSVC и Visual Studio Build Tools с компонентом C++ ([docs/windows-toolchain.md](docs/windows-toolchain.md)).
+
+```bash
+make overlay-build   # первая сборка 4–5 минут, следующие быстрее
+make overlay-run
+```
+
+Результат — один файл `overlay/src-tauri/target/release/cc-overlay.exe`, его можно запускать напрямую из Windows. Окно появляется в левом верхнем углу, поверх всех окон, и пропускает клики сквозь себя. Управление — глобальными хоткеями:
+
+| Хоткей | Действие |
+|---|---|
+| `Ctrl+Alt+M` | режим перемещения: окно ловит мышь, его можно перетащить. Повторное нажатие закрепляет и сохраняет позицию |
+| `Ctrl+Alt+C` | компактный режим: контекст, скорость, лимит 5 часов |
+| `Ctrl+Alt+↑` / `Ctrl+Alt+↓` | прозрачность |
+| `Ctrl+Alt+H` | спрятать или показать |
+| `Ctrl+Alt+Q` | закрыть |
+
+Позиция, прозрачность и режим сохраняются между запусками. Если стек остановлен, окно показывает «бэкенд недоступен» и само переподключается, когда стек поднимется.
+
 ## Команды
 
 | Команда | Что делает |
@@ -81,6 +102,8 @@ make up-history    # по желанию: Grafana на http://127.0.0.1:3000 (ad
 | `make down` | остановить; данные в томах сохраняются |
 | `make restart` | перезапустить после правки конфигов |
 | `make snapshot` | текущий снимок overlay-api |
+| `make overlay-build` | собрать окно оверлея на Windows (из WSL через `cmd.exe`) |
+| `make overlay-run` | запустить собранное окно |
 | `make overlay-dev` | интерфейс оверлея в браузере, http://127.0.0.1:1420; клавиша `c` — компактный режим |
 | `make logs`, `make ps` | логи и состояние контейнеров |
 | `make check` | проверить конфиги: compose, коллектор, Prometheus, YAML, Dockerfile |
@@ -124,7 +147,7 @@ prometheus/prometheus.yml    цели и интервалы сбора
 prometheus/tests/            тесты семантики итогов (promtool)
 grafana/provisioning/        источники данных как код
 overlay-api/                 сервис показателей: снимок, SSE, приём status line
-overlay/                     интерфейс оверлея (TypeScript, Vite); оболочка окна Tauri — в работе
+overlay/                     окно оверлея: интерфейс (TypeScript, Vite) и оболочка Tauri (src-tauri)
 statusline/                  скрипт status line для Claude Code
 hooks/                       хук Claude Code: лимиты подписки через /usage
 tools/synth/                 генератор синтетической телеметрии и e2e-тесты

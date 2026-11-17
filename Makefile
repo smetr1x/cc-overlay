@@ -17,7 +17,7 @@ YAMLLINT_IMAGE := cytopia/yamllint:1-0.14
 HADOLINT_IMAGE := hadolint/hadolint:v2.15.1-alpine
 SYNTH_IMAGE := cc-overlay/synth:dev
 
-.PHONY: overlay-dev overlay-lock restart fmt go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy snapshot
+.PHONY: overlay-build overlay-run overlay-dev overlay-lock restart fmt go-cache verify-real help up up-history down logs ps wait check test test-e2e build synth tidy snapshot
 
 help: ## Показать список команд
 	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -91,6 +91,13 @@ test-e2e: .env go-cache ## Сквозной тест на синтетике: sy
 	if [ $$status -ne 0 ]; then $(E2E) logs --tail=40 otel-collector overlay-api; fi; \
 	$(E2E) down -v --remove-orphans >/dev/null 2>&1; \
 	exit $$status
+
+# Сборка окна идёт средствами Windows (cmd.exe из WSL): Tauri не собирает Windows-приложение под Linux.
+overlay-build: ## Собрать окно оверлея на Windows (нужны Rust и MSVC, см. docs/windows-toolchain.md)
+	cd overlay && cmd.exe /c "set PATH=%USERPROFILE%\.cargo\bin;%PATH% && npm ci --no-audit --no-fund && npx tauri build --no-bundle"
+
+overlay-run: ## Запустить собранное окно оверлея
+	cd overlay/src-tauri/target/release && (./cc-overlay.exe >/dev/null 2>&1 &)
 
 overlay-dev: .env ## Интерфейс оверлея в браузере: http://127.0.0.1:1420 (нужен запущенный стек)
 	$(COMPOSE) --profile dev run --rm --no-deps --service-ports overlay-dev
